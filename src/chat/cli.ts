@@ -199,7 +199,7 @@ async function main(): Promise<void> {
       return;
     }
     case "listen": {
-      const port = rest[0] ? Number(rest[0]) : DEFAULT_PORT;
+      const port = rest[0] ? Number(rest[0]) : Number(process.env.PORT) || DEFAULT_PORT;
       await listen(port);
       return;
     }

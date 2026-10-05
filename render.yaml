@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: didcomm-ts-listen
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: node dist/chat/cli.js listen
+    envVars:
+      - key: NODE_VERSION
+        value: "26"
