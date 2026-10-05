@@ -3,7 +3,7 @@
  * Minimal CLI chat demo over generic DIDComm v2.
  *
  * Usage:
- *   node dist/chat/cli.js send <peer-did> <endpoint-url> <text...>
+ *   node dist/chat/cli.js send <peer-did> <endpoint-url> <text...> [--attach-provenance <sha256-hex>] [--provenance-url <url>]
  *   node dist/chat/cli.js listen [port]
  *
  * Peer DIDs must be the `did:key` form this package's own identities use
@@ -22,14 +22,55 @@ import {
   type SecretsResolver,
 } from "../core/index.js";
 import { sendHttp, listenHttp } from "../transport/index.js";
+import { attachProvenance, readProvenance } from "../provenance/index.js";
 
 /** Basic-message protocol URI (generic DIDComm v2, not interop-partner specific). */
 const BASIC_MESSAGE_TYPE = "https://didcomm.org/basicmessage/2.0/message";
 const DEFAULT_PORT = 8787;
 
 function usage(): never {
-  console.error("usage:\n  chat send <peer-did> <endpoint-url> <text...>\n  chat listen [port]");
+  console.error(
+    "usage:\n" +
+      "  chat send <peer-did> <endpoint-url> <text...> [--attach-provenance <sha256-hex>] [--provenance-url <url>]\n" +
+      "  chat listen [port]",
+  );
   process.exit(1);
+}
+
+interface SendArgs {
+  peerDid: string;
+  endpoint: string;
+  text: string;
+  attachProvenanceHash?: string;
+  provenanceUrl?: string;
+}
+
+/** Parses `send`'s positional args plus its `--attach-provenance`/`--provenance-url` flags, which may be interspersed with the text words. */
+function parseSendArgs(rest: string[]): SendArgs | null {
+  const [peerDid, endpoint, ...tail] = rest;
+  if (!peerDid || !endpoint) return null;
+
+  const words: string[] = [];
+  let attachProvenanceHash: string | undefined;
+  let provenanceUrl: string | undefined;
+
+  for (let i = 0; i < tail.length; i++) {
+    const arg = tail[i];
+    if (arg === "--attach-provenance") {
+      attachProvenanceHash = tail[++i];
+      if (!attachProvenanceHash) return null;
+      continue;
+    }
+    if (arg === "--provenance-url") {
+      provenanceUrl = tail[++i];
+      if (!provenanceUrl) return null;
+      continue;
+    }
+    words.push(arg);
+  }
+
+  if (words.length === 0) return null;
+  return { peerDid, endpoint, text: words.join(" "), attachProvenanceHash, provenanceUrl };
 }
 
 /** Builds a did:key DIDDoc with a single keyAgreement verification method. */
@@ -75,10 +116,24 @@ function identitySecretsResolver(identity: Identity): SecretsResolver {
   };
 }
 
-async function send(peerDid: string, endpoint: string, text: string): Promise<void> {
+async function send(
+  peerDid: string,
+  endpoint: string,
+  text: string,
+  options: { attachProvenanceHash?: string; provenanceUrl?: string } = {},
+): Promise<void> {
   const identity = loadOrCreateIdentity();
   const did = didKeyResolver(identity);
   const secrets = identitySecretsResolver(identity);
+
+  const attachments = options.attachProvenanceHash
+    ? [
+        attachProvenance(
+          { id: randomUUID(), data: { base64: Buffer.from(text, "utf8").toString("base64") } },
+          { hash: { alg: "sha256", value: options.attachProvenanceHash }, url: options.provenanceUrl },
+        ),
+      ]
+    : undefined;
 
   const envelope = await packAuthcrypt(
     {
@@ -88,6 +143,7 @@ async function send(peerDid: string, endpoint: string, text: string): Promise<vo
       body: { content: text },
       from: identity.did,
       to: [peerDid],
+      ...(attachments ? { attachments } : {}),
     },
     [peerDid],
     identity.did,
@@ -108,6 +164,21 @@ async function listen(port: number): Promise<void> {
     const { message, senderKey } = await unpack(envelopeBytes, { did, secrets });
     const content = (message.body as { content?: string } | undefined)?.content ?? "<non-chat message>";
     console.log(`[${senderKey ?? message.from ?? "unknown"}] ${content}`);
+
+    const attachments = (message as { attachments?: unknown }).attachments;
+    if (Array.isArray(attachments)) {
+      for (const attachment of attachments) {
+        if (typeof attachment !== "object" || attachment === null) continue;
+        const ref = readProvenance(
+          attachment as { id: string; data: { base64?: string; json?: unknown; links?: string[] } },
+        );
+        if (!ref) continue;
+        const id = (attachment as { id?: unknown }).id;
+        console.log(
+          `[provenance] attachment ${typeof id === "string" ? id : "?"}: sha256:${ref.hash.value} (${ref.url ?? "embedded"})`,
+        );
+      }
+    }
   });
 
   console.log(`identity: ${identity.did}`);
@@ -119,9 +190,12 @@ async function main(): Promise<void> {
 
   switch (cmd) {
     case "send": {
-      const [peerDid, endpoint, ...words] = rest;
-      if (!peerDid || !endpoint || words.length === 0) usage();
-      await send(peerDid, endpoint, words.join(" "));
+      const parsed = parseSendArgs(rest);
+      if (!parsed) usage();
+      await send(parsed.peerDid, parsed.endpoint, parsed.text, {
+        attachProvenanceHash: parsed.attachProvenanceHash,
+        provenanceUrl: parsed.provenanceUrl,
+      });
       return;
     }
     case "listen": {

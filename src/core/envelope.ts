@@ -95,6 +95,18 @@ export type PlaintextMessage = {
 
 export type EnvelopeEncoding = 'json' | 'cbor';
 
+/**
+ * Multi-device trust gate (see src/attestation/eat.ts's header comment): before a
+ * resolved recipient key is trusted for multi-recipient authcrypt/anoncrypt, the
+ * caller may require proof — e.g. verification of an EAT token via
+ * `verifyEatToken` from src/attestation — that the key belongs to an attested
+ * device. `verify` returns false (not a thrown error) for a key that fails
+ * attestation; `resolveRecipientKeyIds` turns that into a clear, key-naming error.
+ */
+export interface RecipientKeyAttestation {
+  verify(keyId: string, verificationMethod: VerificationMethod): Promise<boolean>;
+}
+
 export interface PackOptions {
   /** Resolves recipient/sender DID Docs. Required: packing needs it to find keys. */
   did: DidResolver;
@@ -107,6 +119,14 @@ export interface PackOptions {
    * Default false — this thin wrapper does not implement the Forward protocol.
    */
   forward?: boolean;
+  /**
+   * Optional multi-device trust gate. When present, every resolved recipient
+   * key is checked with `attestation.verify` before it is included in the
+   * envelope; a key that fails verification throws rather than being packed.
+   * Omitted (the default): no gating, identical behavior to before this option
+   * existed.
+   */
+  attestation?: RecipientKeyAttestation;
 }
 
 export interface UnpackResolvers {
@@ -132,6 +152,7 @@ export interface UnpackResult {
 async function resolveRecipientKeyIds(
   toDidsOrKeys: string[],
   resolver: DidResolver,
+  attestation?: RecipientKeyAttestation,
 ): Promise<{ keyIds: string[]; verificationMethods: VerificationMethod[] }> {
   const keyIds: string[] = [];
   const verificationMethods: VerificationMethod[] = [];
@@ -170,6 +191,15 @@ async function resolveRecipientKeyIds(
         "DID listing one key per member); pack separately per recipient DID for genuinely " +
         'distinct parties.',
     );
+  }
+
+  if (attestation) {
+    for (let i = 0; i < keyIds.length; i++) {
+      const ok = await attestation.verify(keyIds[i], verificationMethods[i]);
+      if (!ok) {
+        throw new Error(`Recipient key failed attestation: ${keyIds[i]}`);
+      }
+    }
   }
 
   return { keyIds, verificationMethods };
@@ -226,7 +256,11 @@ async function packEncrypted(
     throw new Error('At least one recipient (DID or key ID) is required');
   }
 
-  const { keyIds, verificationMethods } = await resolveRecipientKeyIds(toDidsOrKeys, options.did);
+  const { keyIds, verificationMethods } = await resolveRecipientKeyIds(
+    toDidsOrKeys,
+    options.did,
+    options.attestation,
+  );
   if (keyIds.length === 0) {
     throw new Error('No key agreement keys resolved for the given recipients');
   }

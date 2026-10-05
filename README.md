@@ -30,11 +30,7 @@ other DIDComm implementations (e.g. chat.wyvrn.app) rather than reuse one.
 
 ## Status
 
-Scaffolded modules with unit tests; typecheck clean. One test suite
-(`test/core.envelope.test.ts`) does not run under Jest — see the comment at
-the top of `jest.config.js` for why (an upstream `didcomm` package packaging
-constraint, not a logic defect) — its pack/unpack logic was verified
-correct via direct Node execution instead.
+Scaffolded modules with unit tests; typecheck clean. All suites run under Jest.
 
 ## Development
 
