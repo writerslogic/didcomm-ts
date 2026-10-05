@@ -6,21 +6,35 @@
  *   node dist/chat/cli.js send <peer-did> <endpoint-url> <text...> [--attach-provenance <sha256-hex>] [--provenance-url <url>]
  *   node dist/chat/cli.js listen [port]
  *
- * Peer DIDs must be the `did:key` form this package's own identities use
- * (a bare X25519 key-agreement key, see keys.ts) — there is no DID network
- * resolver here, so an explicit transport endpoint is passed on the command
- * line rather than discovered from a DIDComm service entry.
+ * Peer DIDs may be `did:key` (a bare X25519 key-agreement key, see keys.ts)
+ * or `did:web` (resolved over HTTPS, see didWeb.ts). There is still no
+ * DID-network-based *endpoint* discovery: `<endpoint-url>` is always the
+ * literal HTTP destination the envelope is POSTed to. What a resolved peer
+ * DID Doc's DIDCommMessaging service entry (if any) determines is routing —
+ * when it declares mediators (`routingKeys`), the envelope is forward-wrapped
+ * through them before being sent to that same endpoint; with no mediators,
+ * the envelope is sent as-is, as before.
  */
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { didKeyFragment, didKeyToX25519PublicJwk, loadOrCreateIdentity, type Identity } from "./keys.js";
+import { resolveDidWeb } from "./didWeb.js";
 import {
   packAuthcrypt,
+  packAnoncrypt,
   unpack,
   type DIDDoc,
   type DidResolver,
   type SecretsResolver,
+  type PlaintextMessage as CorePlaintextMessage,
 } from "../core/index.js";
+import {
+  selectRoutingPath,
+  wrapForwardChain,
+  type DIDDoc as RoutingDIDDoc,
+  type AnoncryptProvider,
+  type EncryptedMessage,
+} from "../routing/index.js";
 import { sendHttp, listenHttp } from "../transport/index.js";
 import { attachProvenance, readProvenance } from "../provenance/index.js";
 
@@ -87,17 +101,50 @@ function didKeyDoc(did: string): DIDDoc {
   };
 }
 
-/** A DidResolver that resolves only the local identity's own DID and `did:key` peers. */
-function didKeyResolver(identity: Identity): DidResolver {
+/**
+ * A DidResolver that resolves the local identity's own DID, `did:key` peers
+ * (reusing keys.ts's own logic via `didKeyDoc`), and `did:web` peers (via
+ * `resolveDidWeb`). Any other DID method throws.
+ */
+function combinedResolver(identity: Identity): DidResolver {
   const ownDoc = didKeyDoc(identity.did);
   return {
     async resolve(did: string): Promise<DIDDoc | null> {
       if (did === identity.did) return ownDoc;
-      try {
-        return didKeyDoc(did);
-      } catch {
-        return null;
+
+      const method = did.split(":")[1];
+      if (method === "key") {
+        try {
+          return didKeyDoc(did);
+        } catch {
+          return null;
+        }
       }
+      if (method === "web") {
+        return resolveDidWeb(did);
+      }
+      throw new Error("unsupported DID method");
+    },
+  };
+}
+
+/**
+ * Adapts `packAnoncrypt` into routing/forward.ts's `AnoncryptProvider` shape,
+ * so forward-wrap messages can be anoncrypted to a mediator's resolved key
+ * using the same crypto layer as the rest of this module. `decrypt` is
+ * unused by `send` (the CLI only ever wraps a forward message as a sender,
+ * never unwraps one as a mediator) and throws if called.
+ */
+function anoncryptProvider(did: DidResolver, secrets: SecretsResolver): AnoncryptProvider {
+  return {
+    async encrypt(message, recipientKeyId): Promise<EncryptedMessage> {
+      const plaintext: CorePlaintextMessage = { typ: "application/didcomm-plain+json", ...message };
+      const packed = await packAnoncrypt(plaintext, [recipientKeyId], { did, secrets });
+      const json = typeof packed === "string" ? packed : new TextDecoder().decode(packed);
+      return JSON.parse(json) as EncryptedMessage;
+    },
+    decrypt(): never {
+      throw new Error("anoncryptProvider: decrypt is not implemented (the chat CLI never acts as a mediator)");
     },
   };
 }
@@ -123,8 +170,11 @@ async function send(
   options: { attachProvenanceHash?: string; provenanceUrl?: string } = {},
 ): Promise<void> {
   const identity = loadOrCreateIdentity();
-  const did = didKeyResolver(identity);
+  const did = combinedResolver(identity);
   const secrets = identitySecretsResolver(identity);
+
+  const peerDoc = await did.resolve(peerDid);
+  if (!peerDoc) throw new Error(`could not resolve peer DID: ${peerDid}`);
 
   const attachments = options.attachProvenanceHash
     ? [
@@ -150,14 +200,38 @@ async function send(
     { did, secrets },
   );
 
-  const bytes = typeof envelope === "string" ? new TextEncoder().encode(envelope) : envelope;
-  await sendHttp(endpoint, bytes, "application/didcomm-encrypted+json");
+  // Routing: forward-wrap through the peer's mediators, if its resolved
+  // DID Doc declares any (via a DIDCommMessaging service entry's
+  // `routingKeys`). With no service entry, or none with mediators, behavior
+  // is unchanged: the authcrypt envelope is sent as-is. `<endpoint-url>` is
+  // always the literal HTTP destination either way — routing only decides
+  // whether/how the bytes sent to it are forward-wrapped, not which URL they
+  // go to (there is still no DID-network-based endpoint discovery).
+  const routingDoc = { id: peerDoc.id, service: peerDoc.service } as unknown as RoutingDIDDoc;
+  const [routingPath] = selectRoutingPath(routingDoc);
+
+  let wireBytes: Uint8Array;
+  if (routingPath && routingPath.mediators.length > 0) {
+    const envelopeJson =
+      typeof envelope === "string" ? envelope : new TextDecoder().decode(envelope);
+    const wrapped = await wrapForwardChain(
+      JSON.parse(envelopeJson) as EncryptedMessage,
+      routingPath.mediators,
+      peerDid,
+      anoncryptProvider(did, secrets),
+    );
+    wireBytes = new TextEncoder().encode(JSON.stringify(wrapped));
+  } else {
+    wireBytes = typeof envelope === "string" ? new TextEncoder().encode(envelope) : envelope;
+  }
+
+  await sendHttp(endpoint, wireBytes, "application/didcomm-encrypted+json");
   console.log(`sent to ${peerDid} via ${endpoint}`);
 }
 
 async function listen(port: number): Promise<void> {
   const identity = loadOrCreateIdentity();
-  const did = didKeyResolver(identity);
+  const did = combinedResolver(identity);
   const secrets = identitySecretsResolver(identity);
 
   const { port: boundPort } = await listenHttp(port, async (envelopeBytes) => {

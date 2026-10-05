@@ -27,6 +27,17 @@ other DIDComm implementations (e.g. chat.wyvrn.app) rather than reuse one.
   field. Does not implement C2PA manifest creation/signing/validation.
 - `src/chat` — a minimal CLI chat demo (`send`/`listen`) wiring the above
   together, for interop testing against other DIDComm v2 implementations.
+  Its local identity (`.didcomm-ts/identity.json`) is plaintext by default;
+  set `DIDCOMM_TS_PASSPHRASE` before first run to encrypt it at rest
+  (AES-256-GCM, scrypt-derived key) for anything beyond local testing.
+  Peer DIDs may be `did:key` or `did:web` (resolved over HTTPS, per the
+  [did:web method](https://w3c-ccg.github.io/did-method-web/)). `send`
+  resolves the peer's DID Doc and runs `selectRoutingPath` on it: if a
+  `DIDCommMessaging` service entry declares mediators (`routingKeys`), the
+  authcrypt envelope is forward-wrapped through them before sending; with no
+  mediators, it is sent as-is. `<endpoint-url>` is always the literal HTTP
+  destination POSTed to — there is still no DID-network-based endpoint
+  discovery, so routing only decides the wrapping, not the transport target.
 
 ## Status
 
