@@ -1,0 +1,116 @@
+import { generateKeyPairSync, type JsonWebKey } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+/** A local DIDComm identity: a did:key DID and its X25519 key-agreement secret (JWK). */
+export interface Identity {
+  did: string;
+  secretJwk: JsonWebKey;
+}
+
+const STORE_DIR = join(process.cwd(), ".didcomm-ts");
+const STORE_FILE = join(STORE_DIR, "identity.json");
+
+// did:key multicodec prefix for an X25519 public key (code 0xec, varint-encoded),
+// per https://github.com/multiformats/multicodec/blob/master/table.csv.
+const X25519_PUB_MULTICODEC_PREFIX = Uint8Array.from([0xec, 0x01]);
+
+const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+function base58btcEncode(bytes: Uint8Array): string {
+  let num = 0n;
+  for (const byte of bytes) num = (num << 8n) + BigInt(byte);
+
+  let body = "";
+  while (num > 0n) {
+    body = BASE58_ALPHABET[Number(num % 58n)] + body;
+    num /= 58n;
+  }
+
+  let leadingZeros = 0;
+  for (const byte of bytes) {
+    if (byte !== 0) break;
+    leadingZeros++;
+  }
+
+  return "1".repeat(leadingZeros) + (body || "1");
+}
+
+function didKeyFromX25519PublicJwk(jwk: JsonWebKey): string {
+  if (!jwk.x) throw new Error("X25519 public JWK is missing 'x'");
+  const publicKeyBytes = Buffer.from(jwk.x, "base64url");
+  const prefixed = new Uint8Array(X25519_PUB_MULTICODEC_PREFIX.length + publicKeyBytes.length);
+  prefixed.set(X25519_PUB_MULTICODEC_PREFIX, 0);
+  prefixed.set(publicKeyBytes, X25519_PUB_MULTICODEC_PREFIX.length);
+  return `did:key:z${base58btcEncode(prefixed)}`;
+}
+
+function base58btcDecode(input: string): Uint8Array {
+  let num = 0n;
+  for (const char of input) {
+    const index = BASE58_ALPHABET.indexOf(char);
+    if (index === -1) throw new Error(`invalid base58 character: ${char}`);
+    num = num * 58n + BigInt(index);
+  }
+
+  const bytes: number[] = [];
+  while (num > 0n) {
+    bytes.unshift(Number(num % 256n));
+    num /= 256n;
+  }
+
+  let leadingOnes = 0;
+  for (const char of input) {
+    if (char !== "1") break;
+    leadingOnes++;
+  }
+
+  return new Uint8Array([...new Array(leadingOnes).fill(0), ...bytes]);
+}
+
+/** The key-agreement verification method fragment this package uses for a did:key DID. */
+export function didKeyFragment(did: string): string {
+  const multibaseValue = did.slice("did:key:".length);
+  return `${did}#${multibaseValue}`;
+}
+
+/**
+ * Resolves a `did:key` DID (produced by `generateIdentity` above — an X25519
+ * key-agreement public key, multicodec-prefixed and base58btc-encoded, with
+ * no separate controller/signing key) back into its public key JWK.
+ */
+export function didKeyToX25519PublicJwk(did: string): JsonWebKey {
+  if (!did.startsWith("did:key:z")) {
+    throw new Error(`not a supported did:key DID: ${did}`);
+  }
+  const decoded = base58btcDecode(did.slice("did:key:z".length));
+  const prefix = decoded.slice(0, X25519_PUB_MULTICODEC_PREFIX.length);
+  if (!prefix.every((byte, i) => byte === X25519_PUB_MULTICODEC_PREFIX[i])) {
+    throw new Error(`unsupported multicodec prefix for did:key DID: ${did}`);
+  }
+  const publicKeyBytes = decoded.slice(X25519_PUB_MULTICODEC_PREFIX.length);
+  return { kty: "OKP", crv: "X25519", x: Buffer.from(publicKeyBytes).toString("base64url") };
+}
+
+function generateIdentity(): Identity {
+  const { publicKey, privateKey } = generateKeyPairSync("x25519");
+  const publicJwk = publicKey.export({ format: "jwk" }) as JsonWebKey;
+  const secretJwk = privateKey.export({ format: "jwk" }) as JsonWebKey;
+  return { did: didKeyFromX25519PublicJwk(publicJwk), secretJwk };
+}
+
+/**
+ * Loads the local identity from `.didcomm-ts/identity.json` (relative to
+ * the current working directory), generating and persisting a new
+ * did:key identity on first run.
+ */
+export function loadOrCreateIdentity(): Identity {
+  if (existsSync(STORE_FILE)) {
+    return JSON.parse(readFileSync(STORE_FILE, "utf8")) as Identity;
+  }
+
+  const identity = generateIdentity();
+  mkdirSync(STORE_DIR, { recursive: true, mode: 0o700 });
+  writeFileSync(STORE_FILE, JSON.stringify(identity, null, 2), { mode: 0o600 });
+  return identity;
+}

@@ -1,0 +1,29 @@
+{
+  "name": "@writerslogic/didcomm-ts",
+  "version": "0.1.0",
+  "description": "A second DIDComm v2.x implementation in TypeScript, interoperable with chat.wyvrn.app",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "typecheck": "tsc -p . --noEmit"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "didcomm": "^0.4.1",
+    "cbor-x": "^1.5.9",
+    "ws": "^8.18.0",
+    "express": "^4.21.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "@types/node": "^22.7.5",
+    "@types/ws": "^8.5.12",
+    "@types/express": "^4.17.21",
+    "@types/jest": "^29.5.13"
+  }
+}
