@@ -1,7 +1,8 @@
-# @writerslogic/didcomm-ts
+### @writerslogic/didcomm-ts
 
-A second DIDComm v2.x implementation, in TypeScript, built to interoperate with
-other DIDComm implementations (e.g. chat.wyvrn.app) rather than reuse one.
+A second DIDComm v2.x implementation, in TypeScript, built to interoperate with other DIDComm implementations (e.g. chat.wyvrn.app) rather than reuse one.
+
+[![CI](https://img.shields.io/github/actions/workflow/status/writerslogic/didcomm-ts/ci.yml?branch=main&label=CI)](https://github.com/writerslogic/didcomm-ts/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/writerslogic/didcomm-ts/blob/main/package.json)
 
 ## Architecture
 
