@@ -22,6 +22,7 @@ import express, { type Express } from "express";
 import { didKeyFragment, didKeyToX25519PublicJwk, loadOrCreateIdentity, type Identity } from "./keys.js";
 import { resolveDidWeb } from "./didWeb.js";
 import { resolveDidPeer } from "./didPeer.js";
+import { requestMediation, updateKeylist } from "./mediation.js";
 import {
   packAuthcrypt,
   packAnoncrypt,
@@ -50,7 +51,8 @@ function usage(): never {
     "usage:\n" +
       "  chat send <peer-did> <endpoint-url> <text...> [--attach-provenance <sha256-hex>] [--provenance-url <url>]\n" +
       "  chat listen [port]\n" +
-      "  chat serve [port]",
+      "  chat serve [port]\n" +
+      "  chat mediate <mediator-did>",
   );
   process.exit(1);
 }
@@ -398,6 +400,27 @@ async function serve(port: number): Promise<void> {
   });
 }
 
+/**
+ * Requests mediation from `mediatorDid` (DIDComm Coordinate Mediation 2.0:
+ * mediate-request → mediate-grant) and registers this identity's own DID in
+ * its keylist (keylist-update, action "add"). Prints the mediator's granted
+ * routing DID, which should be used as a `routingKeys` entry when
+ * publishing this identity's own service endpoint for others to reach it
+ * through this mediator.
+ */
+async function mediate(mediatorDid: string): Promise<void> {
+  const identity = loadOrCreateIdentity();
+  const did = combinedResolver(identity);
+  const secrets = identitySecretsResolver(identity);
+  const ctx = { selfDid: identity.did, did, secrets };
+
+  const grant = await requestMediation(mediatorDid, ctx);
+  console.log(`mediation granted; routing_did: ${grant.routingDid}`);
+
+  const keylistResult = await updateKeylist(mediatorDid, identity.did, "add", ctx);
+  console.log(`keylist-update: ${keylistResult.result} (${identity.did})`);
+}
+
 async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2);
 
@@ -419,6 +442,12 @@ async function main(): Promise<void> {
     case "serve": {
       const port = rest[0] ? Number(rest[0]) : Number(process.env.PORT) || DEFAULT_PORT;
       await serve(port);
+      return;
+    }
+    case "mediate": {
+      const [mediatorDid] = rest;
+      if (!mediatorDid) usage();
+      await mediate(mediatorDid);
       return;
     }
     default:

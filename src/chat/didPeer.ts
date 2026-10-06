@@ -101,7 +101,13 @@ export function resolveDidPeer(did: string): DIDDoc {
     const kid = `${did}#key-${keyIndex}`;
     verificationMethod.push({
       id: kid,
-      type: codec === "x25519" ? "X25519KeyAgreementKey2020" : "Ed25519VerificationKey2020",
+      // "JsonWebKey2020" (not a curve-specific type string) is what the
+      // installed `didcomm` package's resolver actually recognizes for a
+      // publicKeyJwk-bearing verification method — confirmed empirically
+      // elsewhere in this codebase (see core.envelope.test.ts, cli.ts's
+      // didKeyDoc); a curve-specific type here silently breaks pack/unpack
+      // with "No compatible crypto: No common keys" despite valid key bytes.
+      type: "JsonWebKey2020",
       controller: did,
       publicKeyJwk:
         codec === "x25519"

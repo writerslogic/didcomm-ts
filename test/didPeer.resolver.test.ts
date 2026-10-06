@@ -11,8 +11,12 @@ describe('resolveDidPeer', () => {
     expect(doc.authentication).toEqual([`${did}#key-1`]);
     expect(doc.keyAgreement).toEqual([`${did}#key-2`]);
     expect(doc.verificationMethod).toHaveLength(2);
-    expect(doc.verificationMethod[0].type).toBe('Ed25519VerificationKey2020');
-    expect(doc.verificationMethod[1].type).toBe('X25519KeyAgreementKey2020');
+    // 'JsonWebKey2020' (not a curve-specific type) is what the installed
+    // `didcomm` package's resolver actually recognizes — see didPeer.ts.
+    expect(doc.verificationMethod[0].type).toBe('JsonWebKey2020');
+    expect(doc.verificationMethod[1].type).toBe('JsonWebKey2020');
+    expect(doc.verificationMethod[0].publicKeyJwk).toMatchObject({ crv: 'Ed25519' });
+    expect(doc.verificationMethod[1].publicKeyJwk).toMatchObject({ crv: 'X25519' });
     expect(doc.service).toEqual([]);
   });
 
