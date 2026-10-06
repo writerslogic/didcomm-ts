@@ -44,11 +44,21 @@ other DIDComm implementations (e.g. chat.wyvrn.app) rather than reuse one.
   (`GET /api/identity`, `GET /api/messages`, `POST /api/send`) that the page
   polls/calls; identity, keys, and all pack/unpack crypto stay server-side
   in Node exactly as with `send`/`listen` — the browser only ever sees the
-  local DID and plaintext chat log, never key material. None of these
-  routes require authentication: anyone who can reach the port can read
-  the whole chat log and send authcrypt messages as this identity. Do not
-  expose `serve` on a public URL (as `render.yaml` now does) without
-  putting auth in front of it.
+  local DID and plaintext chat log, never key material. Each `serve`
+  process generates a random API token on startup and prints it to
+  stderr; every `/api/*` route requires it as an `Authorization: Bearer
+  <token>` header (checked in constant time) and otherwise responds `401`.
+  `GET /` and the raw DIDComm `POST /` receiver stay unauthenticated (the
+  page needs to load before the token is in hand, and the DIDComm receiver
+  authenticates via its own envelope crypto instead). The web page prompts
+  for the token once and keeps it in `sessionStorage`. The chat log
+  persists across restarts in `.didcomm-ts/messages.json` (plaintext,
+  written atomically, capped at the last 200 entries) — this is not
+  encrypted even when `DIDCOMM_TS_PASSPHRASE` is set, since that passphrase
+  only covers `identity.json`. `send` also accepts a `--cbor` flag to pack
+  the envelope as `application/didcomm-encrypted+cbor` instead of JSON
+  (incompatible with a mediated peer, since forward-wrapping is JSON-only);
+  `listen`/`serve` auto-detect either encoding on receipt.
 
 ## Status
 

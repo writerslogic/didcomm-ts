@@ -17,9 +17,11 @@
  * through them before being sent to that same endpoint; with no mediators,
  * the envelope is sent as-is, as before.
  */
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import express, { type Express } from "express";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import { didKeyFragment, didKeyToX25519PublicJwk, loadOrCreateIdentity, type Identity } from "./keys.js";
 import { resolveDidWeb } from "./didWeb.js";
 import { resolveDidPeer, resolveDidPeer4 } from "./didPeer.js";
@@ -35,6 +37,7 @@ import {
   type DidResolver,
   type SecretsResolver,
   type PlaintextMessage as CorePlaintextMessage,
+  type EnvelopeEncoding,
 } from "../core/index.js";
 import {
   selectRoutingPath,
@@ -53,7 +56,7 @@ const DEFAULT_PORT = 8787;
 function usage(): never {
   console.error(
     "usage:\n" +
-      "  chat send <peer-did> <endpoint-url> <text...> [--attach-provenance <sha256-hex>] [--provenance-url <url>]\n" +
+      "  chat send <peer-did> <endpoint-url> <text...> [--attach-provenance <sha256-hex>] [--provenance-url <url>] [--cbor]\n" +
       "  chat listen [port]\n" +
       "  chat serve [port]\n" +
       "  chat mediate <mediator-did>\n" +
@@ -68,9 +71,10 @@ interface SendArgs {
   text: string;
   attachProvenanceHash?: string;
   provenanceUrl?: string;
+  cbor?: boolean;
 }
 
-/** Parses `send`'s positional args plus its `--attach-provenance`/`--provenance-url` flags, which may be interspersed with the text words. */
+/** Parses `send`'s positional args plus its `--attach-provenance`/`--provenance-url`/`--cbor` flags, which may be interspersed with the text words. */
 function parseSendArgs(rest: string[]): SendArgs | null {
   const [peerDid, endpoint, ...tail] = rest;
   if (!peerDid || !endpoint) return null;
@@ -78,6 +82,7 @@ function parseSendArgs(rest: string[]): SendArgs | null {
   const words: string[] = [];
   let attachProvenanceHash: string | undefined;
   let provenanceUrl: string | undefined;
+  let cbor: boolean | undefined;
 
   for (let i = 0; i < tail.length; i++) {
     const arg = tail[i];
@@ -91,11 +96,15 @@ function parseSendArgs(rest: string[]): SendArgs | null {
       if (!provenanceUrl) return null;
       continue;
     }
+    if (arg === "--cbor") {
+      cbor = true;
+      continue;
+    }
     words.push(arg);
   }
 
   if (words.length === 0) return null;
-  return { peerDid, endpoint, text: words.join(" "), attachProvenanceHash, provenanceUrl };
+  return { peerDid, endpoint, text: words.join(" "), attachProvenanceHash, provenanceUrl, cbor };
 }
 
 /** Builds a did:key DIDDoc with a single keyAgreement verification method. */
@@ -199,13 +208,27 @@ async function sendMessage(
   peerDid: string,
   endpoint: string,
   text: string,
-  options: { attachProvenanceHash?: string; provenanceUrl?: string } = {},
+  options: { attachProvenanceHash?: string; provenanceUrl?: string; cbor?: boolean } = {},
 ): Promise<globalThis.Response> {
   const did = combinedResolver(identity);
   const secrets = identitySecretsResolver(identity);
 
   const peerDoc = await did.resolve(peerDid);
   if (!peerDoc) throw new Error(`could not resolve peer DID: ${peerDid}`);
+
+  // Routing is decided from the peer's resolved DID Doc alone, so it can be
+  // determined before packing: forward-wrap bytes are always JSON-wrapped
+  // (`wrapForwardChain` below works on parsed `EncryptedMessage` objects),
+  // so a CBOR-packed inner envelope cannot be forward-wrapped by this CLI.
+  const routingDoc = { id: peerDoc.id, service: peerDoc.service } as unknown as RoutingDIDDoc;
+  const [routingPath] = selectRoutingPath(routingDoc);
+  const hasMediators = Boolean(routingPath && routingPath.mediators.length > 0);
+  if (hasMediators && options.cbor) {
+    throw new Error(
+      "--cbor cannot be combined with a mediated peer: forward-wrapping only supports JSON envelopes",
+    );
+  }
+  const encoding: EnvelopeEncoding = options.cbor ? "cbor" : "json";
 
   const attachments = options.attachProvenanceHash
     ? [
@@ -228,21 +251,18 @@ async function sendMessage(
     },
     [peerDid],
     identity.did,
-    { did, secrets },
+    { did, secrets, encoding },
   );
 
-  // Routing: forward-wrap through the peer's mediators, if its resolved
-  // DID Doc declares any (via a DIDCommMessaging service entry's
-  // `routingKeys`). With no service entry, or none with mediators, behavior
-  // is unchanged: the authcrypt envelope is sent as-is. `<endpoint-url>` is
-  // always the literal HTTP destination either way — routing only decides
-  // whether/how the bytes sent to it are forward-wrapped, not which URL they
-  // go to (there is still no DID-network-based endpoint discovery).
-  const routingDoc = { id: peerDoc.id, service: peerDoc.service } as unknown as RoutingDIDDoc;
-  const [routingPath] = selectRoutingPath(routingDoc);
-
+  // Forward-wrap through the peer's mediators, if its resolved DID Doc
+  // declares any (via a DIDCommMessaging service entry's `routingKeys`).
+  // With no service entry, or none with mediators, behavior is unchanged:
+  // the authcrypt envelope is sent as-is. `<endpoint-url>` is always the
+  // literal HTTP destination either way — routing only decides whether/how
+  // the bytes sent to it are forward-wrapped, not which URL they go to
+  // (there is still no DID-network-based endpoint discovery).
   let wireBytes: Uint8Array;
-  if (routingPath && routingPath.mediators.length > 0) {
+  if (hasMediators && routingPath) {
     const envelopeJson =
       typeof envelope === "string" ? envelope : new TextDecoder().decode(envelope);
     const wrapped = await wrapForwardChain(
@@ -256,7 +276,10 @@ async function sendMessage(
     wireBytes = typeof envelope === "string" ? new TextEncoder().encode(envelope) : envelope;
   }
 
-  const res = await sendHttp(endpoint, wireBytes, "application/didcomm-encrypted+json");
+  const contentType = options.cbor
+    ? "application/didcomm-encrypted+cbor"
+    : "application/didcomm-encrypted+json";
+  const res = await sendHttp(endpoint, wireBytes, contentType);
   return res;
 }
 
@@ -264,7 +287,7 @@ async function send(
   peerDid: string,
   endpoint: string,
   text: string,
-  options: { attachProvenanceHash?: string; provenanceUrl?: string } = {},
+  options: { attachProvenanceHash?: string; provenanceUrl?: string; cbor?: boolean } = {},
 ): Promise<void> {
   const identity = loadOrCreateIdentity();
   await sendMessage(identity, peerDid, endpoint, text, options);
@@ -331,24 +354,94 @@ function pushChatLogEntry(log: ChatLogEntry[], entry: ChatLogEntry): void {
   if (log.length > CHAT_LOG_LIMIT) log.splice(0, log.length - CHAT_LOG_LIMIT);
 }
 
+/** Local persistence for the chat log, so it survives a `serve` restart. */
+const STORE_DIR = join(process.cwd(), ".didcomm-ts");
+const MESSAGES_FILE = join(STORE_DIR, "messages.json");
+
+/**
+ * Loads the persisted chat log, if any. A missing file means no history yet
+ * (an empty log); a present-but-corrupt file throws rather than silently
+ * discarding whatever history it holds.
+ */
+function loadChatLog(): ChatLogEntry[] {
+  if (!existsSync(MESSAGES_FILE)) return [];
+  const raw = readFileSync(MESSAGES_FILE, "utf8");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `corrupt message log at ${MESSAGES_FILE}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`corrupt message log at ${MESSAGES_FILE}: expected a JSON array`);
+  }
+  return (parsed as ChatLogEntry[]).slice(-CHAT_LOG_LIMIT);
+}
+
+/**
+ * Rewrites the persisted chat log atomically (write to a temp file in the
+ * same directory, then rename over the real path) so a crash mid-write
+ * cannot truncate it. Persistence failures are logged, not thrown: the
+ * message itself has already been sent/received by the time this runs, so
+ * failing the HTTP response for it would be misleading.
+ */
+function persistChatLog(log: ChatLogEntry[]): void {
+  try {
+    mkdirSync(STORE_DIR, { recursive: true, mode: 0o700 });
+    const tmpFile = join(STORE_DIR, `messages.json.${process.pid}.tmp`);
+    writeFileSync(tmpFile, JSON.stringify(log, null, 2), { mode: 0o600 });
+    renameSync(tmpFile, MESSAGES_FILE);
+  } catch (err) {
+    console.error(
+      `failed to persist message log to ${MESSAGES_FILE}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/**
+ * Express middleware requiring `Authorization: Bearer <token>` on every
+ * request it guards. Compares in constant time (after a length check,
+ * since `timingSafeEqual` throws on mismatched lengths) to avoid leaking
+ * the token through response-time differences.
+ */
+function requireApiToken(token: string) {
+  const expected = Buffer.from(`Bearer ${token}`);
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const got = Buffer.from(req.get("authorization") ?? "");
+    const ok = got.length === expected.length && timingSafeEqual(got, expected);
+    if (!ok) {
+      res.status(401).set("WWW-Authenticate", "Bearer").json({ error: "unauthorized" });
+      return;
+    }
+    next();
+  };
+}
+
 /**
  * Builds the `serve` subcommand's Express app: the real DIDComm envelope
- * receiver (`POST /`, from `createHttpReceiver`, unmodified), three JSON
- * API routes for the web chat UI, and the static chat page itself. Kept
- * separate from `serve()` so it can be exercised without binding a port.
+ * receiver (`POST /`, from `createHttpReceiver`, unmodified, unauthenticated
+ * — it is a different protocol with its own crypto auth), the static chat
+ * page (`GET /`, also unauthenticated so it can load before the user has
+ * the token), and three JSON API routes for the web chat UI, all of which
+ * require `apiToken` via `requireApiToken`. Kept separate from `serve()` so
+ * it can be exercised without binding a port.
  */
-function buildServeApp(identity: Identity): Express {
+function buildServeApp(identity: Identity, apiToken: string): Express {
   const did = combinedResolver(identity);
   const secrets = identitySecretsResolver(identity);
-  const chatLog: ChatLogEntry[] = [];
+  const chatLog: ChatLogEntry[] = loadChatLog();
 
   const app = createHttpReceiver(async (envelopeBytes) => {
     const { message, senderKey } = await unpackAndLog(envelopeBytes, { did, secrets });
     const peerDid = message.from ?? senderKey?.split("#")[0] ?? "unknown";
     const content = (message.body as { content?: string } | undefined)?.content ?? "<non-chat message>";
     pushChatLogEntry(chatLog, { direction: "received", peerDid, text: content, timestamp: Date.now() });
+    persistChatLog(chatLog);
   });
 
+  app.use("/api", requireApiToken(apiToken));
   app.use("/api", express.json());
 
   app.get("/api/identity", (_req, res) => {
@@ -382,6 +475,7 @@ function buildServeApp(identity: Identity): Express {
           return;
         }
         pushChatLogEntry(chatLog, { direction: "sent", peerDid, text, timestamp: Date.now() });
+        persistChatLog(chatLog);
         res.json({ ok: true });
       })
       .catch((err: unknown) => {
@@ -397,7 +491,8 @@ function buildServeApp(identity: Identity): Express {
 
 async function serve(port: number): Promise<void> {
   const identity = loadOrCreateIdentity();
-  const app = buildServeApp(identity);
+  const apiToken = randomBytes(32).toString("hex");
+  const app = buildServeApp(identity, apiToken);
 
   await new Promise<void>((resolve, reject) => {
     const server = app.listen(port);
@@ -407,6 +502,8 @@ async function serve(port: number): Promise<void> {
       const boundPort = typeof address === "object" && address !== null ? address.port : port;
       console.log(`identity: ${identity.did}`);
       console.log(`chat UI listening on port ${boundPort}`);
+      console.error(`API token: ${apiToken}`);
+      console.error(`Send it as an "Authorization: Bearer ${apiToken}" header on every /api/* request.`);
       resolve();
     });
   });
@@ -473,6 +570,7 @@ async function main(): Promise<void> {
       await send(parsed.peerDid, parsed.endpoint, parsed.text, {
         attachProvenanceHash: parsed.attachProvenanceHash,
         provenanceUrl: parsed.provenanceUrl,
+        cbor: parsed.cbor,
       });
       return;
     }

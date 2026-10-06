@@ -99,9 +99,57 @@
   var formEl = document.getElementById("send-form");
   var sendButton = document.getElementById("send-button");
 
+  var TOKEN_KEY = "didcomm-ts-api-token";
+  var polling = true;
+
+  function getStoredToken() {
+    try {
+      return sessionStorage.getItem(TOKEN_KEY);
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  function setStoredToken(token) {
+    try {
+      if (token === null) sessionStorage.removeItem(TOKEN_KEY);
+      else sessionStorage.setItem(TOKEN_KEY, token);
+    } catch (_err) {
+      /* sessionStorage unavailable (e.g. private mode); token just won't persist across reloads */
+    }
+  }
+
+  function getApiToken() {
+    var token = getStoredToken();
+    if (token) return token;
+    token = window.prompt("Enter the API token printed on the server's stderr at startup:");
+    if (!token) return null;
+    setStoredToken(token);
+    return token;
+  }
+
+  /** fetch wrapper for /api/* calls: attaches the Authorization header, and on a 401 clears the stored token and stops polling (a bad/stale token must not spam prompt() from the poll loop). */
+  function apiFetch(url, opts) {
+    var token = getApiToken();
+    opts = opts || {};
+    opts.headers = opts.headers || {};
+    if (token) opts.headers["Authorization"] = "Bearer " + token;
+    return fetch(url, opts).then(function (res) {
+      if (res.status === 401) {
+        setStoredToken(null);
+        polling = false;
+        errorEl.textContent = "invalid API token; reload the page to re-enter it";
+      }
+      return res;
+    });
+  }
+
   function loadIdentity() {
-    fetch("/api/identity")
-      .then(function (res) { return res.json(); })
+    apiFetch("/api/identity")
+      .then(function (res) {
+        if (!res.ok) throw new Error("failed to load identity");
+        return res.json();
+      })
       .then(function (data) {
         identityEl.textContent = "identity: " + data.did;
       })
@@ -134,8 +182,12 @@
   }
 
   function pollMessages() {
-    fetch("/api/messages")
-      .then(function (res) { return res.json(); })
+    if (!polling) return;
+    apiFetch("/api/messages")
+      .then(function (res) {
+        if (!res.ok) throw new Error("poll failed");
+        return res.json();
+      })
       .then(renderLog)
       .catch(function () {
         /* a transient poll failure is not worth surfacing as a send error */
@@ -153,7 +205,7 @@
       text: document.getElementById("text").value,
     };
 
-    fetch("/api/send", {
+    apiFetch("/api/send", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
