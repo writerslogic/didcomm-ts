@@ -10,18 +10,27 @@ import { selectRoutingPath, type DIDDoc as RoutingDIDDoc } from "../routing/inde
 import { sendHttp } from "../transport/index.js";
 
 /**
- * Client for the DIDComm Mediator Coordination Protocol 2.0
- * (https://didcomm.org/coordinate-mediation/2.0/): requesting mediation from
- * a mediator and registering/removing recipient keys in its keylist. Message
- * type URIs and body shapes are taken directly from that spec.
+ * Client for the DIDComm Mediator Coordination Protocol, versions 2.0
+ * (https://didcomm.org/coordinate-mediation/2.0/) and 3.0
+ * (https://didcomm.org/coordinate-mediation/3.0/). The two versions differ
+ * in message type names and one body shape:
+ *   - 2.0: `keylist-update` / `keylist-update-response` / `keylist-query` /
+ *     `keylist`; `mediate-grant.body.routing_did` is a single string.
+ *   - 3.0: `recipient-update` / `recipient-update-response` /
+ *     `recipient-query` / `recipient`; `mediate-grant.body.routing_did` is
+ *     an ARRAY of strings (one routing DID per mediator-side device/path —
+ *     verified against the real reply from mediator.wyvrn.app, which only
+ *     discloses 3.0 via `discover-features/2.0` and rejects 2.0 message
+ *     types with a `report-problem` "unsupported message type").
+ * `mediate-request`/`mediate-grant`/`mediate-deny` message type names and
+ * bodies are identical across both versions.
+ *
+ * Which version a given mediator speaks isn't knowable in advance, so
+ * `discoverMediationVersion` queries it via the standard
+ * `discover-features/2.0` protocol rather than guessing.
  */
 
-const MEDIATE_REQUEST_TYPE = "https://didcomm.org/coordinate-mediation/2.0/mediate-request";
-const MEDIATE_GRANT_TYPE = "https://didcomm.org/coordinate-mediation/2.0/mediate-grant";
-const MEDIATE_DENY_TYPE = "https://didcomm.org/coordinate-mediation/2.0/mediate-deny";
-const KEYLIST_UPDATE_TYPE = "https://didcomm.org/coordinate-mediation/2.0/keylist-update";
-const KEYLIST_UPDATE_RESPONSE_TYPE =
-  "https://didcomm.org/coordinate-mediation/2.0/keylist-update-response";
+export type MediationProtocolVersion = "2.0" | "3.0";
 
 export interface MediationContext {
   /** This party's own DID (the mediation client / future routing recipient). */
@@ -31,15 +40,41 @@ export interface MediationContext {
 }
 
 export interface MediationGrant {
-  /** The mediator's routing DID — the recipient uses this as a `routingKeys` entry in its own service. */
-  routingDid: string;
+  /**
+   * The mediator's granted routing DID(s) — each becomes a `routingKeys`
+   * entry in this identity's own published service. Always an array, even
+   * against a 2.0 mediator (whose single `routing_did` is wrapped in one).
+   */
+  routingDids: string[];
 }
 
-export interface KeylistUpdateResult {
+export interface RecipientUpdateResult {
   recipientDid: string;
   action: "add" | "remove";
   result: "client_error" | "server_error" | "no_change" | "success";
 }
+
+const MEDIATE_REQUEST_TYPE = (v: MediationProtocolVersion) =>
+  `https://didcomm.org/coordinate-mediation/${v}/mediate-request`;
+const MEDIATE_GRANT_TYPE = (v: MediationProtocolVersion) =>
+  `https://didcomm.org/coordinate-mediation/${v}/mediate-grant`;
+const MEDIATE_DENY_TYPE = (v: MediationProtocolVersion) =>
+  `https://didcomm.org/coordinate-mediation/${v}/mediate-deny`;
+/** 2.0 calls this "keylist-update"/"keylist-update-response"; 3.0 renames it "recipient-update"/"...-response". */
+const RECIPIENT_UPDATE_TYPE = (v: MediationProtocolVersion) =>
+  v === "2.0"
+    ? "https://didcomm.org/coordinate-mediation/2.0/keylist-update"
+    : "https://didcomm.org/coordinate-mediation/3.0/recipient-update";
+const RECIPIENT_UPDATE_RESPONSE_TYPE = (v: MediationProtocolVersion) =>
+  v === "2.0"
+    ? "https://didcomm.org/coordinate-mediation/2.0/keylist-update-response"
+    : "https://didcomm.org/coordinate-mediation/3.0/recipient-update-response";
+
+const DISCOVER_FEATURES_QUERIES_TYPE = "https://didcomm.org/discover-features/2.0/queries";
+const DISCOVER_FEATURES_DISCLOSE_TYPES = [
+  "https://didcomm.org/discover-features/2.0/disclose",
+  "https://didcomm.org/discover-features/2.0/disclosures",
+];
 
 function basePlaintext(type: string, body: unknown, from: string, to: string): PlaintextMessage {
   return {
@@ -96,40 +131,82 @@ async function sendAndAwaitReply(
   return message;
 }
 
-/** Sends `mediate-request` to `mediatorDid` and returns its granted routing DID, or throws on `mediate-deny`. */
-export async function requestMediation(
+/**
+ * Queries `mediatorDid` via `discover-features/2.0` for which
+ * `coordinate-mediation` protocol version it supports, preferring 3.0 if
+ * both are disclosed. Throws if neither is disclosed.
+ */
+export async function discoverMediationVersion(
   mediatorDid: string,
   ctx: MediationContext,
-): Promise<MediationGrant> {
+): Promise<MediationProtocolVersion> {
   const endpoint = await resolveDirectEndpoint(mediatorDid, ctx.did);
-  const request = basePlaintext(MEDIATE_REQUEST_TYPE, {}, ctx.selfDid, mediatorDid);
+  const request = basePlaintext(
+    DISCOVER_FEATURES_QUERIES_TYPE,
+    { queries: [{ "feature-type": "protocol", match: "https://didcomm.org/coordinate-mediation/*" }] },
+    ctx.selfDid,
+    mediatorDid,
+  );
 
   const reply = await sendAndAwaitReply(request, mediatorDid, endpoint, ctx);
-
-  if (reply.type === MEDIATE_DENY_TYPE) {
-    throw new Error(`mediator ${mediatorDid} denied the mediation request`);
-  }
-  if (reply.type !== MEDIATE_GRANT_TYPE) {
+  if (!DISCOVER_FEATURES_DISCLOSE_TYPES.includes(reply.type)) {
     throw new Error(`unexpected reply type from ${mediatorDid}: ${reply.type}`);
   }
 
-  const routingDid = (reply.body as { routing_did?: string } | undefined)?.routing_did;
+  const disclosures =
+    (reply.body as { disclosures?: { id?: string }[] } | undefined)?.disclosures ?? [];
+  const ids = new Set(disclosures.map((d) => d.id));
+  if (ids.has("https://didcomm.org/coordinate-mediation/3.0")) return "3.0";
+  if (ids.has("https://didcomm.org/coordinate-mediation/2.0")) return "2.0";
+  throw new Error(`${mediatorDid} did not disclose support for coordinate-mediation 2.0 or 3.0`);
+}
+
+/**
+ * Sends `mediate-request` to `mediatorDid` and returns its granted routing
+ * DID(s), or throws on `mediate-deny`. `version` is auto-discovered via
+ * `discoverMediationVersion` when omitted.
+ */
+export async function requestMediation(
+  mediatorDid: string,
+  ctx: MediationContext,
+  version?: MediationProtocolVersion,
+): Promise<MediationGrant> {
+  const v = version ?? (await discoverMediationVersion(mediatorDid, ctx));
+  const endpoint = await resolveDirectEndpoint(mediatorDid, ctx.did);
+  const request = basePlaintext(MEDIATE_REQUEST_TYPE(v), {}, ctx.selfDid, mediatorDid);
+
+  const reply = await sendAndAwaitReply(request, mediatorDid, endpoint, ctx);
+
+  if (reply.type === MEDIATE_DENY_TYPE(v)) {
+    throw new Error(`mediator ${mediatorDid} denied the mediation request`);
+  }
+  if (reply.type !== MEDIATE_GRANT_TYPE(v)) {
+    throw new Error(`unexpected reply type from ${mediatorDid}: ${reply.type}`);
+  }
+
+  const routingDid = (reply.body as { routing_did?: string | string[] } | undefined)?.routing_did;
   if (!routingDid) {
     throw new Error(`mediate-grant from ${mediatorDid} is missing body.routing_did`);
   }
-  return { routingDid };
+  return { routingDids: Array.isArray(routingDid) ? routingDid : [routingDid] };
 }
 
-/** Adds or removes `recipientDid` in `mediatorDid`'s keylist via `keylist-update`. */
-export async function updateKeylist(
+/**
+ * Adds or removes `recipientDid` in `mediatorDid`'s recipient list
+ * (`keylist-update` in 2.0, `recipient-update` in 3.0). `version` is
+ * auto-discovered via `discoverMediationVersion` when omitted.
+ */
+export async function updateRecipient(
   mediatorDid: string,
   recipientDid: string,
   action: "add" | "remove",
   ctx: MediationContext,
-): Promise<KeylistUpdateResult> {
+  version?: MediationProtocolVersion,
+): Promise<RecipientUpdateResult> {
+  const v = version ?? (await discoverMediationVersion(mediatorDid, ctx));
   const endpoint = await resolveDirectEndpoint(mediatorDid, ctx.did);
   const request = basePlaintext(
-    KEYLIST_UPDATE_TYPE,
+    RECIPIENT_UPDATE_TYPE(v),
     { updates: [{ recipient_did: recipientDid, action }] },
     ctx.selfDid,
     mediatorDid,
@@ -137,21 +214,21 @@ export async function updateKeylist(
 
   const reply = await sendAndAwaitReply(request, mediatorDid, endpoint, ctx);
 
-  if (reply.type !== KEYLIST_UPDATE_RESPONSE_TYPE) {
+  if (reply.type !== RECIPIENT_UPDATE_RESPONSE_TYPE(v)) {
     throw new Error(`unexpected reply type from ${mediatorDid}: ${reply.type}`);
   }
 
   const updated = (
     reply.body as {
-      updated?: { recipient_did: string; action: "add" | "remove"; result: KeylistUpdateResult["result"] }[];
+      updated?: { recipient_did: string; action: "add" | "remove"; result: RecipientUpdateResult["result"] }[];
     }
   )?.updated;
   const entry = updated?.find((item) => item.recipient_did === recipientDid && item.action === action);
   if (!entry) {
-    throw new Error(`keylist-update-response from ${mediatorDid} did not confirm ${action} for ${recipientDid}`);
+    throw new Error(`recipient-update-response from ${mediatorDid} did not confirm ${action} for ${recipientDid}`);
   }
   if (entry.result !== "success" && entry.result !== "no_change") {
-    throw new Error(`keylist-update for ${recipientDid} failed: ${entry.result}`);
+    throw new Error(`recipient-update for ${recipientDid} failed: ${entry.result}`);
   }
   return { recipientDid, action, result: entry.result };
 }
