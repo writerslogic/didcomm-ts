@@ -83,7 +83,8 @@ const X25519_PUB_MULTICODEC_PREFIX = Uint8Array.from([0xec, 0x01]);
 
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
-function base58btcEncode(bytes: Uint8Array): string {
+/** Encodes raw bytes as base58btc (no multibase `z` prefix). */
+export function base58btcEncode(bytes: Uint8Array): string {
   let num = 0n;
   for (const byte of bytes) num = (num << 8n) + BigInt(byte);
 

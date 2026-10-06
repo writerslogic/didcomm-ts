@@ -7,8 +7,9 @@
  *   node dist/chat/cli.js listen [port]
  *   node dist/chat/cli.js serve [port]   (web chat UI, same receiver as "listen")
  *
- * Peer DIDs may be `did:key` (a bare X25519 key-agreement key, see keys.ts)
- * or `did:web` (resolved over HTTPS, see didWeb.ts). There is still no
+ * Peer DIDs may be `did:key` (a bare X25519 key-agreement key, see keys.ts),
+ * `did:web` (resolved over HTTPS, see didWeb.ts), or `did:peer:2`/`did:peer:4`
+ * (resolved purely locally, see didPeer.ts). There is still no
  * DID-network-based *endpoint* discovery: `<endpoint-url>` is always the
  * literal HTTP destination the envelope is POSTed to. What a resolved peer
  * DID Doc's DIDCommMessaging service entry (if any) determines is routing —
@@ -21,7 +22,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import express, { type Express } from "express";
 import { didKeyFragment, didKeyToX25519PublicJwk, loadOrCreateIdentity, type Identity } from "./keys.js";
 import { resolveDidWeb } from "./didWeb.js";
-import { resolveDidPeer } from "./didPeer.js";
+import { resolveDidPeer, resolveDidPeer4 } from "./didPeer.js";
 import { requestMediation, updateKeylist } from "./mediation.js";
 import {
   packAuthcrypt,
@@ -131,7 +132,7 @@ function combinedResolver(identity: Identity): DidResolver {
         return resolveDidWeb(did);
       }
       if (method === "peer") {
-        return resolveDidPeer(did);
+        return did.startsWith("did:peer:4") ? resolveDidPeer4(did) : resolveDidPeer(did);
       }
       throw new Error("unsupported DID method");
     },
