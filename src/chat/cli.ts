@@ -24,6 +24,9 @@ import { didKeyFragment, didKeyToX25519PublicJwk, loadOrCreateIdentity, type Ide
 import { resolveDidWeb } from "./didWeb.js";
 import { resolveDidPeer, resolveDidPeer4 } from "./didPeer.js";
 import { requestMediation, updateRecipient } from "./mediation.js";
+import { resolveDirectEndpoint } from "./didcommRpc.js";
+import { requestStatus, requestDelivery, acknowledgeReceived } from "./pickup.js";
+import { buildDidPeer2 } from "./didPeer.js";
 import {
   packAuthcrypt,
   packAnoncrypt,
@@ -53,7 +56,8 @@ function usage(): never {
       "  chat send <peer-did> <endpoint-url> <text...> [--attach-provenance <sha256-hex>] [--provenance-url <url>]\n" +
       "  chat listen [port]\n" +
       "  chat serve [port]\n" +
-      "  chat mediate <mediator-did>",
+      "  chat mediate <mediator-did>\n" +
+      "  chat pickup <mediator-did>",
   );
   process.exit(1);
 }
@@ -421,6 +425,35 @@ async function mediate(mediatorDid: string): Promise<void> {
 
   const recipientResult = await updateRecipient(mediatorDid, identity.did, "add", ctx);
   console.log(`recipient-update: ${recipientResult.result} (${identity.did})`);
+
+  const mediatorEndpoint = await resolveDirectEndpoint(mediatorDid, did);
+  const publicKeyBase64Url = (identity.secretJwk as { x?: string }).x;
+  if (publicKeyBase64Url) {
+    const peerDid = buildDidPeer2(publicKeyBase64Url, mediatorEndpoint, grant.routingDids);
+    console.log(`reachable at: ${peerDid}`);
+  }
+}
+
+/** Retrieves and prints all messages currently queued at `mediatorDid`, then acknowledges them. */
+async function pickup(mediatorDid: string): Promise<void> {
+  const identity = loadOrCreateIdentity();
+  const did = combinedResolver(identity);
+  const secrets = identitySecretsResolver(identity);
+  const ctx = { selfDid: identity.did, did, secrets };
+
+  const status = await requestStatus(mediatorDid, ctx);
+  console.log(`messages queued: ${status.messageCount}`);
+  if (status.messageCount === 0) return;
+
+  const delivered = await requestDelivery(mediatorDid, ctx, status.messageCount);
+  for (const { envelopeBytes } of delivered) {
+    const { message, senderKey } = await unpack(envelopeBytes, { did, secrets });
+    const content = (message.body as { content?: string } | undefined)?.content ?? "<non-chat message>";
+    console.log(`[${senderKey ?? message.from ?? "unknown"}] ${content}`);
+  }
+
+  const result = await acknowledgeReceived(mediatorDid, ctx, delivered.map((d) => d.attachmentId));
+  console.log(`acknowledged; messages still queued: ${result.messageCount}`);
 }
 
 async function main(): Promise<void> {
@@ -450,6 +483,12 @@ async function main(): Promise<void> {
       const [mediatorDid] = rest;
       if (!mediatorDid) usage();
       await mediate(mediatorDid);
+      return;
+    }
+    case "pickup": {
+      const [mediatorDid] = rest;
+      if (!mediatorDid) usage();
+      await pickup(mediatorDid);
       return;
     }
     default:

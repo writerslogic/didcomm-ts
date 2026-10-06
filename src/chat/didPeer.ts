@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import type { DIDDoc, Service, VerificationMethod } from "../core/index.js";
 import { multikeyToJwk } from "./multikey.js";
 import { base58btcDecode, base58btcEncode } from "./keys.js";
+
+function encodeMultibaseKey(bytes: Uint8Array): string {
+  return `z${base58btcEncode(bytes)}`;
+}
 import { normalizeDidDoc } from "./normalizeDidDoc.js";
 
 // Multicodec varint prefix for raw JSON content (code 0x0200), and multihash
@@ -106,6 +110,32 @@ export function resolveDidPeer(did: string): DIDDoc {
   }
 
   return { id: did, keyAgreement, authentication, verificationMethod, service };
+}
+
+const X25519_PUB_MULTICODEC_PREFIX_BYTES = Uint8Array.from([0xec, 0x01]);
+
+/**
+ * Builds a `did:peer:2` string with one `keyAgreement` key (`x25519PublicKeyBase64Url`,
+ * this identity's X25519 public key, base64url — the same value as its
+ * `secretJwk.x`) and one `DIDCommMessaging` service entry addressed through
+ * `mediatorEndpoint` with `routingKeys` (typically a mediator's granted
+ * `routing_did`(s) from `mediate-grant` — see mediation.ts).
+ */
+export function buildDidPeer2(
+  x25519PublicKeyBase64Url: string,
+  mediatorEndpoint: string,
+  routingKeys: string[],
+): string {
+  const publicKeyBytes = Buffer.from(x25519PublicKeyBase64Url, "base64url");
+  const prefixed = new Uint8Array(X25519_PUB_MULTICODEC_PREFIX_BYTES.length + publicKeyBytes.length);
+  prefixed.set(X25519_PUB_MULTICODEC_PREFIX_BYTES, 0);
+  prefixed.set(publicKeyBytes, X25519_PUB_MULTICODEC_PREFIX_BYTES.length);
+  const keyEntry = `E${encodeMultibaseKey(prefixed)}`;
+
+  const serviceJson = JSON.stringify({ t: "dm", s: mediatorEndpoint, r: routingKeys });
+  const serviceEntry = `S${Buffer.from(serviceJson, "utf8").toString("base64url").replace(/=+$/, "")}`;
+
+  return `did:peer:2.${keyEntry}.${serviceEntry}`;
 }
 
 /** Minimal shape of a did:peer:4 "Input Document" — no root `id`, relative ids/references, omittable `controller`. */

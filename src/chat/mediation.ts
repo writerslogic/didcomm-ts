@@ -1,13 +1,6 @@
 import { randomUUID } from "node:crypto";
-import {
-  packAuthcrypt,
-  unpack,
-  type DidResolver,
-  type PlaintextMessage,
-  type SecretsResolver,
-} from "../core/index.js";
-import { selectRoutingPath, type DIDDoc as RoutingDIDDoc } from "../routing/index.js";
-import { sendHttp } from "../transport/index.js";
+import type { PlaintextMessage } from "../core/index.js";
+import { resolveDirectEndpoint, sendAndAwaitReply, type RpcContext } from "./didcommRpc.js";
 
 /**
  * Client for the DIDComm Mediator Coordination Protocol, versions 2.0
@@ -32,12 +25,7 @@ import { sendHttp } from "../transport/index.js";
 
 export type MediationProtocolVersion = "2.0" | "3.0";
 
-export interface MediationContext {
-  /** This party's own DID (the mediation client / future routing recipient). */
-  selfDid: string;
-  did: DidResolver;
-  secrets: SecretsResolver;
-}
+export type MediationContext = RpcContext;
 
 export interface MediationGrant {
   /**
@@ -86,49 +74,6 @@ function basePlaintext(type: string, body: unknown, from: string, to: string): P
     to: [to],
     return_route: "all",
   };
-}
-
-/**
- * Resolves `did`'s direct (zero-mediator) HTTP endpoint via its DIDDoc's
- * `DIDCommMessaging` service entry. Mediators are expected to publish a
- * directly reachable endpoint (no routingKeys of their own).
- */
-async function resolveDirectEndpoint(did: string, resolver: DidResolver): Promise<string> {
-  const doc = await resolver.resolve(did);
-  if (!doc) throw new Error(`could not resolve DID: ${did}`);
-  const routingDoc = { id: doc.id, service: doc.service } as unknown as RoutingDIDDoc;
-  const paths = selectRoutingPath(routingDoc);
-  const direct = paths.find((path) => path.mediators.length === 0);
-  if (!direct) {
-    throw new Error(`no directly reachable DIDCommMessaging service endpoint found for ${did}`);
-  }
-  return direct.endpoint;
-}
-
-/** Packs `plaintext` as authcrypt to `mediatorDid`, POSTs it, and unpacks the mediator's synchronous reply. */
-async function sendAndAwaitReply(
-  plaintext: PlaintextMessage,
-  mediatorDid: string,
-  endpoint: string,
-  ctx: MediationContext,
-): Promise<PlaintextMessage> {
-  const envelope = await packAuthcrypt(plaintext, [mediatorDid], ctx.selfDid, {
-    did: ctx.did,
-    secrets: ctx.secrets,
-  });
-  const bytes = typeof envelope === "string" ? new TextEncoder().encode(envelope) : envelope;
-
-  const response = await sendHttp(endpoint, bytes, "application/didcomm-encrypted+json");
-  const replyBytes = new Uint8Array(await response.arrayBuffer());
-  if (replyBytes.length === 0) {
-    throw new Error(
-      `mediator ${mediatorDid} returned no synchronous reply body (HTTP ${response.status}); ` +
-        "this client requires return_route: all support",
-    );
-  }
-
-  const { message } = await unpack(replyBytes, { did: ctx.did, secrets: ctx.secrets });
-  return message;
 }
 
 /**
