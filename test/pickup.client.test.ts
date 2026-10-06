@@ -109,6 +109,29 @@ describe('pickup client (messagepickup 3.0)', () => {
     expect(new TextDecoder().decode(delivered[0].envelopeBytes)).toBe('{"fake":"envelope"}');
   });
 
+  // Regression: mediator.wyvrn.app's real delivery replies use `data.json`
+  // (the attached JWE as a parsed object), not `data.base64` — matching the
+  // DIDComm spec's own attachment example, confirmed via a live round trip.
+  test('requestDelivery decodes json attachments to raw envelope bytes', async () => {
+    const envelopeObject = { ciphertext: 'abc', protected: 'def', recipients: [] };
+    mockMediatorReplies({
+      'https://didcomm.org/messagepickup/3.0/delivery-request': (request) => ({
+        id: randomUUID(),
+        thid: request.id,
+        typ: 'application/didcomm-plain+json',
+        type: 'https://didcomm.org/messagepickup/3.0/delivery',
+        body: {},
+        from: mediator.did,
+        to: [request.from as string],
+        attachments: [{ id: 'msg-2', data: { json: envelopeObject } }],
+      }),
+    });
+
+    const delivered = await requestDelivery(mediator.did, ctx, 10);
+    expect(delivered).toHaveLength(1);
+    expect(JSON.parse(new TextDecoder().decode(delivered[0].envelopeBytes))).toEqual(envelopeObject);
+  });
+
   test('acknowledgeReceived returns the updated queue count', async () => {
     mockMediatorReplies({
       'https://didcomm.org/messagepickup/3.0/messages-received': (request) => ({

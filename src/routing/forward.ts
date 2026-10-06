@@ -78,9 +78,13 @@ export async function wrapInForward(
   crypto: AnoncryptProvider,
   options: WrapInForwardOptions = {},
 ): Promise<EncryptedMessage> {
+  // media_type and data.json match the spec's own "example encrypted
+  // DIDComm message as attachment" exactly (message_structure.md) — a
+  // generic "application/json" here is a plausible real-mediator
+  // interop gap even though it's valid JSON either way.
   const attachment: Attachment = {
     id: options.attachmentId ?? randomUUID(),
-    media_type: 'application/json',
+    media_type: 'application/didcomm-encrypted+json',
     data: { json: message },
   };
 

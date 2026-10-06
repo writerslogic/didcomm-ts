@@ -165,15 +165,22 @@ function anoncryptProvider(did: DidResolver, secrets: SecretsResolver): Anoncryp
 }
 
 /** A SecretsResolver backed by the local identity's one X25519 secret. */
+/**
+ * This identity has exactly one X25519 secret, but it can be addressed by
+ * several different key ids depending on which DID form a peer encrypted
+ * to (its `did:key` fragment, or a `did:peer:2` fragment this identity
+ * published via `buildDidPeer2` — both reference the same underlying key).
+ * So any requested `secretId` is satisfiable by this one secret; there is
+ * no second key to distinguish it from. A multi-key identity would need a
+ * real per-id lookup instead.
+ */
 function identitySecretsResolver(identity: Identity): SecretsResolver {
-  const kid = didKeyFragment(identity.did);
-  const secret = { id: kid, type: "JsonWebKey2020", privateKeyJwk: identity.secretJwk };
   return {
     async get_secret(secretId: string) {
-      return secretId === kid ? secret : null;
+      return { id: secretId, type: "JsonWebKey2020", privateKeyJwk: identity.secretJwk };
     },
     async find_secrets(secretIds: string[]) {
-      return secretIds.includes(kid) ? [kid] : [];
+      return secretIds;
     },
   };
 }

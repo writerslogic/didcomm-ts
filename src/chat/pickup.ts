@@ -68,13 +68,23 @@ export async function requestDelivery(
     throw new Error(`unexpected reply type from ${mediatorDid}: ${reply.type}`);
   }
   const attachments = (
-    reply as { attachments?: { id: string; data: { base64?: string } }[] }
+    reply as { attachments?: { id: string; data: { base64?: string; json?: unknown } }[] }
   ).attachments ?? [];
+  // Real mediators observed in the wild (mediator.wyvrn.app) use `data.json`
+  // — the attached JWE as a parsed JSON object, matching the DIDComm spec's
+  // own "example encrypted DIDComm message as attachment" convention — not
+  // `data.base64`. Support both rather than assuming one.
   return attachments.map((attachment) => {
-    if (!attachment.data.base64) {
-      throw new Error(`delivery attachment ${attachment.id} from ${mediatorDid} has no base64 data`);
+    if (attachment.data.base64) {
+      return { attachmentId: attachment.id, envelopeBytes: Buffer.from(attachment.data.base64, "base64") };
     }
-    return { attachmentId: attachment.id, envelopeBytes: Buffer.from(attachment.data.base64, "base64") };
+    if (attachment.data.json !== undefined) {
+      return {
+        attachmentId: attachment.id,
+        envelopeBytes: new TextEncoder().encode(JSON.stringify(attachment.data.json)),
+      };
+    }
+    throw new Error(`delivery attachment ${attachment.id} from ${mediatorDid} has neither base64 nor json data`);
   });
 }
 
