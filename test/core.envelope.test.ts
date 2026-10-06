@@ -161,6 +161,62 @@ describe('core/envelope', () => {
     }
   });
 
+  // Regression: a plaintext `to` header naming the real recipient DID (as
+  // the chat CLI's `send` sets) must round-trip. didcomm-rust's
+  // pack_encrypted rejects a `to` argument that the plaintext's own `to`
+  // header does not list, so packing must resolve the real recipient DID as
+  // its `to` target, not a synthetic one.
+  test('authcrypt with a plaintext `to` header naming the recipient DID round-trips', async () => {
+    const alice = generateX25519KeyAgreement('did:example:alice-to');
+    const bob = generateX25519KeyAgreement('did:example:bob-to');
+
+    const allDocs = new Map<string, DIDDoc>([
+      [alice.did, alice.doc],
+      [bob.did, bob.doc],
+    ]);
+    const sharedDidResolver = new MapDidResolver(allDocs);
+    const aliceSecrets = new MapSecretsResolver(new Map([[alice.kid, alice.secret]]));
+    const bobSecrets = new MapSecretsResolver(new Map([[bob.kid, bob.secret]]));
+
+    const plaintext: PlaintextMessage = {
+      ...makePlaintextMessage({ content: 'hello bob' }),
+      from: alice.did,
+      to: [bob.did],
+    };
+
+    const envelope = await packAuthcrypt(plaintext, [bob.did], alice.did, {
+      did: sharedDidResolver,
+      secrets: aliceSecrets,
+    });
+
+    const { message } = await unpack(envelope, { did: sharedDidResolver, secrets: bobSecrets });
+    expect((message.body as { content: string }).content).toBe('hello bob');
+  });
+
+  // Regression: a sender device packing to OTHER devices of its own
+  // multi-device DID (an explicit-key-ID subset of that DID's
+  // `keyAgreement`, excluding the sender's own key) must still resolve the
+  // sender's key through the real resolver, not the resolver override
+  // narrowed to the requested recipient keys.
+  test('authcrypt from one device of a multi-device DID to its other devices round-trips', async () => {
+    const devices = generateGroupKeyAgreement('did:example:devices', 3);
+    const [deviceA, deviceB, deviceC] = devices.members;
+
+    const sharedDidResolver = new MapDidResolver(new Map([[devices.did, devices.doc]]));
+    const senderSecrets = new MapSecretsResolver(new Map([[deviceA.kid, deviceA.secret]]));
+    const recipientSecrets = new MapSecretsResolver(new Map([[deviceB.kid, deviceB.secret]]));
+
+    const plaintext = makePlaintextMessage({ content: 'hello other devices' });
+
+    const envelope = await packAuthcrypt(plaintext, [deviceB.kid, deviceC.kid], deviceA.kid, {
+      did: sharedDidResolver,
+      secrets: senderSecrets,
+    });
+
+    const { message } = await unpack(envelope, { did: sharedDidResolver, secrets: recipientSecrets });
+    expect((message.body as { content: string }).content).toBe('hello other devices');
+  });
+
   test('envelope encoding auto-detection round-trips JSON and CBOR', async () => {
     const alice = generateX25519KeyAgreement('did:example:alice2');
     const bob = generateX25519KeyAgreement('did:example:bob4');

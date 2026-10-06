@@ -38,6 +38,17 @@ other DIDComm implementations (e.g. chat.wyvrn.app) rather than reuse one.
   mediators, it is sent as-is. `<endpoint-url>` is always the literal HTTP
   destination POSTed to — there is still no DID-network-based endpoint
   discovery, so routing only decides the wrapping, not the transport target.
+  `chat serve [port]` runs the same DIDComm envelope receiver as `listen`
+  (`POST /`) alongside a minimal web chat UI at `GET /` (a static page
+  under `src/chat/public/`, no build step) and three JSON API routes
+  (`GET /api/identity`, `GET /api/messages`, `POST /api/send`) that the page
+  polls/calls; identity, keys, and all pack/unpack crypto stay server-side
+  in Node exactly as with `send`/`listen` — the browser only ever sees the
+  local DID and plaintext chat log, never key material. None of these
+  routes require authentication: anyone who can reach the port can read
+  the whole chat log and send authcrypt messages as this identity. Do not
+  expose `serve` on a public URL (as `render.yaml` now does) without
+  putting auth in front of it.
 
 ## Status
 

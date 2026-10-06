@@ -207,17 +207,23 @@ async function resolveRecipientKeyIds(
 
 /**
  * Wraps a real DidResolver so that resolving `syntheticId` returns a synthetic
- * DID Doc whose `keyAgreement` is the full set of requested recipient keys
- * (which may belong to different real DIDs), while every other DID still
- * resolves through the caller's real resolver (needed for the sender DID in
- * authcrypt).
+ * DID Doc whose `keyAgreement` is the requested subset of recipient keys
+ * (which all belong to one real DID, per `resolveRecipientKeyIds`'s
+ * single-controller check above this function's call site), while every
+ * other DID still resolves through the caller's real resolver (needed for
+ * the sender DID in authcrypt).
  *
- * Confirmed by running the installed package: a synthetic doc `id` that
- * differs from its `verificationMethod.controller` entries is accepted as
- * long as every controller among the requested keys is the same real DID
- * (see `resolveRecipientKeyIds`'s single-controller check above this
- * function's call site). It is only *cross-DID* controller sets that
- * `pack_encrypted` rejects.
+ * Used only for explicit-key-ID recipients (selecting a subset of a DID's
+ * `keyAgreement`, e.g. specific devices): the override's key is synthetic
+ * rather than the real recipient DID precisely so it does not shadow
+ * resolving that same real DID for any *other* purpose — notably, a sender
+ * device authcrypting to its own sibling devices, where the sender's DID
+ * equals the recipient DID but the sender's own key must still resolve via
+ * the full, real doc. Bare-DID recipients (requesting a DID's whole
+ * `keyAgreement` set, e.g. `packAuthcrypt(msg, [peerDid], ...)`) skip this
+ * override entirely and pack straight to the real DID (see `packEncrypted`),
+ * which also satisfies didcomm-rust's requirement that a plaintext `to`
+ * header list the DID `pack_encrypted` was asked to pack to.
  */
 function buildMultiRecipientResolver(
   realResolver: DidResolver,
@@ -265,17 +271,36 @@ async function packEncrypted(
     throw new Error('No key agreement keys resolved for the given recipients');
   }
 
-  // Always route packing through a synthetic aggregate DID Doc, even for a
-  // single recipient DID, so there is exactly one code path that produces one
-  // JWE with one recipient entry per resolved key, sharing one CEK.
-  const syntheticId = `did:didcomm-ts:multi:${randomUUID()}`;
-  const packDidResolver = buildMultiRecipientResolver(options.did, syntheticId, keyIds, verificationMethods);
+  // Every resolved key's `verificationMethod.controller` is the same real DID
+  // (guaranteed by the single-controller check above); callers naming that
+  // DID itself as a recipient (no `#` fragment, requesting its full
+  // `keyAgreement` set) are the common case — the chat CLI's `send` does
+  // this. For that case, pack straight to the real recipient DID through the
+  // caller's own resolver, with no override at all: `pack_encrypted`'s `to`
+  // argument is then a DID the plaintext `to` header can legitimately list,
+  // and the sender's own DID (if it happens to equal the recipient DID, as
+  // with one device of a multi-device DID messaging its own siblings via
+  // explicit key IDs) still resolves normally.
+  //
+  // Callers naming an explicit key ID (selecting a subset of a DID's
+  // `keyAgreement`, e.g. specific devices) keep the resolver-override path:
+  // packing through a synthetic DID Doc exposing only the requested subset,
+  // as before. Narrowing the override to the real DID in that case would
+  // break resolving the *sender's* key when the sender is another key of
+  // that same DID, since the override would intercept that resolution too.
+  const recipientDid = verificationMethods[0].controller;
+  const hasExplicitKeyId = toDidsOrKeys.some((entry) => entry.includes('#'));
+
+  const packDidTarget = hasExplicitKeyId ? `did:didcomm-ts:multi:${randomUUID()}` : recipientDid;
+  const packDidResolver = hasExplicitKeyId
+    ? buildMultiRecipientResolver(options.did, packDidTarget, keyIds, verificationMethods)
+    : options.did;
 
   const message = new Message(plaintextMessage);
   let packed: string;
   try {
     [packed] = await message.pack_encrypted(
-      syntheticId,
+      packDidTarget,
       fromDidOrKey,
       null,
       packDidResolver,

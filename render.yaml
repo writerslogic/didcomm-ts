@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     buildCommand: npm ci && npm run build
-    startCommand: node dist/chat/cli.js listen
+    startCommand: node dist/chat/cli.js serve
     envVars:
       - key: NODE_VERSION
         value: "26"

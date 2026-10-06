@@ -7,6 +7,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -p .",
+    "postbuild": "node -e \"require('fs').cpSync('src/chat/public','dist/chat/public',{recursive:true})\"",
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
     "typecheck": "tsc -p . --noEmit"
   },

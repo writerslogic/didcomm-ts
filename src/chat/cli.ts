@@ -5,6 +5,7 @@
  * Usage:
  *   node dist/chat/cli.js send <peer-did> <endpoint-url> <text...> [--attach-provenance <sha256-hex>] [--provenance-url <url>]
  *   node dist/chat/cli.js listen [port]
+ *   node dist/chat/cli.js serve [port]   (web chat UI, same receiver as "listen")
  *
  * Peer DIDs may be `did:key` (a bare X25519 key-agreement key, see keys.ts)
  * or `did:web` (resolved over HTTPS, see didWeb.ts). There is still no
@@ -16,7 +17,8 @@
  * the envelope is sent as-is, as before.
  */
 import { randomUUID } from "node:crypto";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
+import express, { type Express } from "express";
 import { didKeyFragment, didKeyToX25519PublicJwk, loadOrCreateIdentity, type Identity } from "./keys.js";
 import { resolveDidWeb } from "./didWeb.js";
 import {
@@ -35,7 +37,7 @@ import {
   type AnoncryptProvider,
   type EncryptedMessage,
 } from "../routing/index.js";
-import { sendHttp, listenHttp } from "../transport/index.js";
+import { sendHttp, listenHttp, createHttpReceiver } from "../transport/index.js";
 import { attachProvenance, readProvenance } from "../provenance/index.js";
 
 /** Basic-message protocol URI (generic DIDComm v2, not interop-partner specific). */
@@ -46,7 +48,8 @@ function usage(): never {
   console.error(
     "usage:\n" +
       "  chat send <peer-did> <endpoint-url> <text...> [--attach-provenance <sha256-hex>] [--provenance-url <url>]\n" +
-      "  chat listen [port]",
+      "  chat listen [port]\n" +
+      "  chat serve [port]",
   );
   process.exit(1);
 }
@@ -95,7 +98,7 @@ function didKeyDoc(did: string): DIDDoc {
     keyAgreement: [kid],
     authentication: [],
     verificationMethod: [
-      { id: kid, type: "X25519KeyAgreementKey2020", controller: did, publicKeyJwk: didKeyToX25519PublicJwk(did) },
+      { id: kid, type: "JsonWebKey2020", controller: did, publicKeyJwk: didKeyToX25519PublicJwk(did) },
     ],
     service: [],
   };
@@ -152,7 +155,7 @@ function anoncryptProvider(did: DidResolver, secrets: SecretsResolver): Anoncryp
 /** A SecretsResolver backed by the local identity's one X25519 secret. */
 function identitySecretsResolver(identity: Identity): SecretsResolver {
   const kid = didKeyFragment(identity.did);
-  const secret = { id: kid, type: "X25519KeyAgreementKey2020", privateKeyJwk: identity.secretJwk };
+  const secret = { id: kid, type: "JsonWebKey2020", privateKeyJwk: identity.secretJwk };
   return {
     async get_secret(secretId: string) {
       return secretId === kid ? secret : null;
@@ -163,13 +166,22 @@ function identitySecretsResolver(identity: Identity): SecretsResolver {
   };
 }
 
-async function send(
+/**
+ * Core of the `send` subcommand: resolves the peer, packs the authcrypt
+ * envelope, forward-wraps it through mediators if the peer's DID Doc
+ * declares any, and POSTs it to `endpoint`. Shared by the CLI `send`
+ * command and the `serve` web UI's `POST /api/send` route — both call this
+ * same function rather than duplicating its logic. Has no side effects
+ * beyond the network send (no console output), and returns the raw
+ * `fetch` Response so callers can inspect `res.ok` themselves.
+ */
+async function sendMessage(
+  identity: Identity,
   peerDid: string,
   endpoint: string,
   text: string,
   options: { attachProvenanceHash?: string; provenanceUrl?: string } = {},
-): Promise<void> {
-  const identity = loadOrCreateIdentity();
+): Promise<globalThis.Response> {
   const did = combinedResolver(identity);
   const secrets = identitySecretsResolver(identity);
 
@@ -225,8 +237,51 @@ async function send(
     wireBytes = typeof envelope === "string" ? new TextEncoder().encode(envelope) : envelope;
   }
 
-  await sendHttp(endpoint, wireBytes, "application/didcomm-encrypted+json");
+  const res = await sendHttp(endpoint, wireBytes, "application/didcomm-encrypted+json");
+  return res;
+}
+
+async function send(
+  peerDid: string,
+  endpoint: string,
+  text: string,
+  options: { attachProvenanceHash?: string; provenanceUrl?: string } = {},
+): Promise<void> {
+  const identity = loadOrCreateIdentity();
+  await sendMessage(identity, peerDid, endpoint, text, options);
   console.log(`sent to ${peerDid} via ${endpoint}`);
+}
+
+/**
+ * Unpacks an inbound envelope and extracts its chat content plus any
+ * provenance attachment references, logging exactly what `listen` has
+ * always logged on receipt. Shared by `listen` and `serve`'s receiver
+ * callback so both go through one code path.
+ */
+async function unpackAndLog(
+  envelopeBytes: Uint8Array,
+  resolvers: { did: DidResolver; secrets: SecretsResolver },
+): Promise<{ message: CorePlaintextMessage; senderKey: string | null; content: string }> {
+  const { message, senderKey } = await unpack(envelopeBytes, resolvers);
+  const content = (message.body as { content?: string } | undefined)?.content ?? "<non-chat message>";
+  console.log(`[${senderKey ?? message.from ?? "unknown"}] ${content}`);
+
+  const attachments = (message as { attachments?: unknown }).attachments;
+  if (Array.isArray(attachments)) {
+    for (const attachment of attachments) {
+      if (typeof attachment !== "object" || attachment === null) continue;
+      const ref = readProvenance(
+        attachment as { id: string; data: { base64?: string; json?: unknown; links?: string[] } },
+      );
+      if (!ref) continue;
+      const id = (attachment as { id?: unknown }).id;
+      console.log(
+        `[provenance] attachment ${typeof id === "string" ? id : "?"}: sha256:${ref.hash.value} (${ref.url ?? "embedded"})`,
+      );
+    }
+  }
+
+  return { message, senderKey, content };
 }
 
 async function listen(port: number): Promise<void> {
@@ -235,28 +290,107 @@ async function listen(port: number): Promise<void> {
   const secrets = identitySecretsResolver(identity);
 
   const { port: boundPort } = await listenHttp(port, async (envelopeBytes) => {
-    const { message, senderKey } = await unpack(envelopeBytes, { did, secrets });
-    const content = (message.body as { content?: string } | undefined)?.content ?? "<non-chat message>";
-    console.log(`[${senderKey ?? message.from ?? "unknown"}] ${content}`);
-
-    const attachments = (message as { attachments?: unknown }).attachments;
-    if (Array.isArray(attachments)) {
-      for (const attachment of attachments) {
-        if (typeof attachment !== "object" || attachment === null) continue;
-        const ref = readProvenance(
-          attachment as { id: string; data: { base64?: string; json?: unknown; links?: string[] } },
-        );
-        if (!ref) continue;
-        const id = (attachment as { id?: unknown }).id;
-        console.log(
-          `[provenance] attachment ${typeof id === "string" ? id : "?"}: sha256:${ref.hash.value} (${ref.url ?? "embedded"})`,
-        );
-      }
-    }
+    await unpackAndLog(envelopeBytes, { did, secrets });
   });
 
   console.log(`identity: ${identity.did}`);
   console.log(`listening on port ${boundPort}`);
+}
+
+/** A chat log entry shown in the web UI, kept in-memory by `serve`. */
+interface ChatLogEntry {
+  direction: "sent" | "received";
+  peerDid: string;
+  text: string;
+  timestamp: number;
+}
+
+const CHAT_LOG_LIMIT = 200;
+
+function pushChatLogEntry(log: ChatLogEntry[], entry: ChatLogEntry): void {
+  log.push(entry);
+  if (log.length > CHAT_LOG_LIMIT) log.splice(0, log.length - CHAT_LOG_LIMIT);
+}
+
+/**
+ * Builds the `serve` subcommand's Express app: the real DIDComm envelope
+ * receiver (`POST /`, from `createHttpReceiver`, unmodified), three JSON
+ * API routes for the web chat UI, and the static chat page itself. Kept
+ * separate from `serve()` so it can be exercised without binding a port.
+ */
+function buildServeApp(identity: Identity): Express {
+  const did = combinedResolver(identity);
+  const secrets = identitySecretsResolver(identity);
+  const chatLog: ChatLogEntry[] = [];
+
+  const app = createHttpReceiver(async (envelopeBytes) => {
+    const { message, senderKey } = await unpackAndLog(envelopeBytes, { did, secrets });
+    const peerDid = message.from ?? senderKey?.split("#")[0] ?? "unknown";
+    const content = (message.body as { content?: string } | undefined)?.content ?? "<non-chat message>";
+    pushChatLogEntry(chatLog, { direction: "received", peerDid, text: content, timestamp: Date.now() });
+  });
+
+  app.use("/api", express.json());
+
+  app.get("/api/identity", (_req, res) => {
+    res.json({ did: identity.did });
+  });
+
+  app.get("/api/messages", (_req, res) => {
+    res.json(chatLog);
+  });
+
+  app.post("/api/send", (req, res) => {
+    const body = req.body as { peerDid?: unknown; endpoint?: unknown; text?: unknown };
+    const { peerDid, endpoint, text } = body;
+    if (typeof peerDid !== "string" || !peerDid) {
+      res.status(400).json({ error: "peerDid is required" });
+      return;
+    }
+    if (typeof endpoint !== "string" || !endpoint) {
+      res.status(400).json({ error: "endpoint is required" });
+      return;
+    }
+    if (typeof text !== "string" || !text) {
+      res.status(400).json({ error: "text is required" });
+      return;
+    }
+
+    void sendMessage(identity, peerDid, endpoint, text)
+      .then((sendRes) => {
+        if (!sendRes.ok) {
+          res.status(502).json({ error: `peer responded ${sendRes.status}` });
+          return;
+        }
+        pushChatLogEntry(chatLog, { direction: "sent", peerDid, text, timestamp: Date.now() });
+        res.json({ ok: true });
+      })
+      .catch((err: unknown) => {
+        res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+      });
+  });
+
+  const publicDir = fileURLToPath(new URL("./public", import.meta.url));
+  app.use(express.static(publicDir));
+
+  return app;
+}
+
+async function serve(port: number): Promise<void> {
+  const identity = loadOrCreateIdentity();
+  const app = buildServeApp(identity);
+
+  await new Promise<void>((resolve, reject) => {
+    const server = app.listen(port);
+    server.once("error", reject);
+    server.once("listening", () => {
+      const address = server.address();
+      const boundPort = typeof address === "object" && address !== null ? address.port : port;
+      console.log(`identity: ${identity.did}`);
+      console.log(`chat UI listening on port ${boundPort}`);
+      resolve();
+    });
+  });
 }
 
 async function main(): Promise<void> {
@@ -275,6 +409,11 @@ async function main(): Promise<void> {
     case "listen": {
       const port = rest[0] ? Number(rest[0]) : Number(process.env.PORT) || DEFAULT_PORT;
       await listen(port);
+      return;
+    }
+    case "serve": {
+      const port = rest[0] ? Number(rest[0]) : Number(process.env.PORT) || DEFAULT_PORT;
+      await serve(port);
       return;
     }
     default:
