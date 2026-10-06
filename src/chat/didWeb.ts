@@ -10,9 +10,52 @@
  * which recovers a `%3A`-encoded port (e.g. `did:web:example.com%3A3000`
  * resolves against `https://example.com:3000/...`).
  */
-import type { DIDDoc } from "../core/index.js";
+import type { DIDDoc, Service, VerificationMethod } from "../core/index.js";
+import { multikeyToJwk } from "./multikey.js";
 
 const DID_WEB_PREFIX = "did:web:";
+
+/** Expands a possibly-relative id ("#key-1") to an absolute one (`${did}#key-1`); leaves absolute ids unchanged. */
+function absoluteId(did: string, id: string): string {
+  return id.startsWith("#") ? `${did}${id}` : id;
+}
+
+/**
+ * Normalizes a resolved DID document so downstream pack/unpack can use it:
+ * - expands relative verification-method/relationship ids to absolute ones
+ *   (many real documents, e.g. mediator.wyvrn.app's, use `"#key-1"` style
+ *   ids relative to the document's own `id`);
+ * - converts `"Multikey"` verification methods (`publicKeyMultibase`) to
+ *   `"JsonWebKey2020"` (`publicKeyJwk`) — see multikey.ts's header comment
+ *   for why the installed `didcomm` package requires this.
+ * Any other verification method type/key representation is passed through
+ * unchanged (and will surface its own error from didcomm-rust if
+ * unsupported, rather than being silently dropped here).
+ */
+function normalizeDidDoc(doc: DIDDoc): DIDDoc {
+  const verificationMethod: VerificationMethod[] = doc.verificationMethod.map((vm) => {
+    const id = absoluteId(doc.id, vm.id);
+    const controller = absoluteId(doc.id, vm.controller);
+    if (vm.type === "Multikey" && typeof vm.publicKeyMultibase === "string") {
+      const { jwk } = multikeyToJwk(vm.publicKeyMultibase);
+      return { id, type: "JsonWebKey2020", controller, publicKeyJwk: jwk };
+    }
+    return { ...vm, id, controller };
+  });
+
+  const service: Service[] = (doc.service ?? []).map((svc) => ({
+    ...svc,
+    id: absoluteId(doc.id, svc.id),
+  }));
+
+  return {
+    ...doc,
+    verificationMethod,
+    authentication: doc.authentication.map((id) => absoluteId(doc.id, id)),
+    keyAgreement: doc.keyAgreement.map((id) => absoluteId(doc.id, id)),
+    service,
+  };
+}
 
 /** Builds the `https://` URL a `did:web` DID resolves its DID document from. */
 function didWebToUrl(did: string): string {
@@ -63,5 +106,5 @@ export async function resolveDidWeb(did: string): Promise<DIDDoc> {
     throw new Error(`did:web resolution failed: document id "${doc.id}" does not match requested DID "${did}"`);
   }
 
-  return doc;
+  return normalizeDidDoc(doc);
 }

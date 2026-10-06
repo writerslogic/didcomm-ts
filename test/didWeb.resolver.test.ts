@@ -63,4 +63,37 @@ describe('resolveDidWeb', () => {
 
     await expect(resolveDidWeb('did:web:example.com')).rejects.toThrow(/HTTP 404/);
   });
+
+  // Regression: mediator.wyvrn.app's real did:web document uses relative
+  // ("#key-N") verification-method/relationship ids and "Multikey"
+  // (publicKeyMultibase) verification methods — the installed `didcomm`
+  // package's resolver recognizes neither form directly (relative ids don't
+  // match pack_encrypted's fully-qualified key-id lookups, and "Multikey" is
+  // not one of its recognized verification-method types), so both must be
+  // normalized on resolution or real-world interop silently breaks with
+  // "No compatible crypto" / an unknown-type deserialization error.
+  it('normalizes relative ids and Multikey verification methods (real-world did:web shape)', async () => {
+    const did = 'did:web:mediator.wyvrn.app';
+    const doc = {
+      id: did,
+      verificationMethod: [
+        { id: '#key-1', type: 'Multikey', publicKeyMultibase: 'z6Mkw5v4p9Jt2hgEL12iCry52AnusRAYH5iAA78pKa3vJjmY', controller: did },
+        { id: '#key-2', type: 'Multikey', publicKeyMultibase: 'z6LSjiQT881Hctk4bJAev6GtxPVfVEdyGNG5es9GF757EEKX', controller: did },
+      ],
+      authentication: ['#key-1'],
+      keyAgreement: ['#key-2'],
+      service: [{ id: '#service', type: 'DIDCommMessaging', serviceEndpoint: { uri: 'https://mediator.wyvrn.app', accept: ['didcomm/v2'], routingKeys: [] } }],
+    };
+    fetchSpy.mockResolvedValue(jsonResponse(200, doc));
+
+    const resolved = await resolveDidWeb(did);
+
+    expect(resolved.authentication).toEqual([`${did}#key-1`]);
+    expect(resolved.keyAgreement).toEqual([`${did}#key-2`]);
+    expect(resolved.verificationMethod[0]).toMatchObject({ id: `${did}#key-1`, type: 'JsonWebKey2020' });
+    expect(resolved.verificationMethod[0].publicKeyJwk).toMatchObject({ kty: 'OKP', crv: 'Ed25519' });
+    expect(resolved.verificationMethod[1]).toMatchObject({ id: `${did}#key-2`, type: 'JsonWebKey2020' });
+    expect(resolved.verificationMethod[1].publicKeyJwk).toMatchObject({ kty: 'OKP', crv: 'X25519' });
+    expect(resolved.service[0].id).toBe(`${did}#service`);
+  });
 });

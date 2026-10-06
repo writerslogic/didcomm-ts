@@ -1,28 +1,5 @@
 import type { DIDDoc, Service, VerificationMethod } from "../core/index.js";
-import { base58btcDecode } from "./keys.js";
-
-// Multicodec varint prefixes, per https://github.com/multiformats/multicodec/blob/master/table.csv:
-// x25519-pub = 0xec, ed25519-pub = 0xed (both encode as a 2-byte varint: [code | 0x80, 0x01]).
-const X25519_PUB_MULTICODEC_PREFIX = [0xec, 0x01];
-const ED25519_PUB_MULTICODEC_PREFIX = [0xed, 0x01];
-
-type KeyCodec = "x25519" | "ed25519";
-
-function decodeMultibaseKey(value: string): { codec: KeyCodec; publicKeyBytes: Uint8Array } {
-  if (!value.startsWith("z")) {
-    throw new Error(`unsupported multibase transform in did:peer key: ${value}`);
-  }
-  const decoded = base58btcDecode(value.slice(1));
-  const matchesPrefix = (prefix: number[]) => prefix.every((byte, i) => decoded[i] === byte);
-
-  if (matchesPrefix(X25519_PUB_MULTICODEC_PREFIX)) {
-    return { codec: "x25519", publicKeyBytes: decoded.slice(X25519_PUB_MULTICODEC_PREFIX.length) };
-  }
-  if (matchesPrefix(ED25519_PUB_MULTICODEC_PREFIX)) {
-    return { codec: "ed25519", publicKeyBytes: decoded.slice(ED25519_PUB_MULTICODEC_PREFIX.length) };
-  }
-  throw new Error(`unsupported multicodec prefix in did:peer key: ${value}`);
-}
+import { multikeyToJwk } from "./multikey.js";
 
 /** Verification relationship each numalgo-2 purpose code contributes to. */
 const PURPOSE_RELATIONSHIP: Record<string, "authentication" | "keyAgreement" | "other"> = {
@@ -97,7 +74,7 @@ export function resolveDidPeer(did: string): DIDDoc {
     }
 
     keyIndex++;
-    const { codec, publicKeyBytes } = decodeMultibaseKey(rest);
+    const { jwk } = multikeyToJwk(rest);
     const kid = `${did}#key-${keyIndex}`;
     verificationMethod.push({
       id: kid,
@@ -109,10 +86,7 @@ export function resolveDidPeer(did: string): DIDDoc {
       // with "No compatible crypto: No common keys" despite valid key bytes.
       type: "JsonWebKey2020",
       controller: did,
-      publicKeyJwk:
-        codec === "x25519"
-          ? { kty: "OKP", crv: "X25519", x: Buffer.from(publicKeyBytes).toString("base64url") }
-          : { kty: "OKP", crv: "Ed25519", x: Buffer.from(publicKeyBytes).toString("base64url") },
+      publicKeyJwk: jwk,
     });
 
     if (relationship === "authentication") authentication.push(kid);
