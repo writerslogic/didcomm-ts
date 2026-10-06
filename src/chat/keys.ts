@@ -111,7 +111,8 @@ function didKeyFromX25519PublicJwk(jwk: JsonWebKey): string {
   return `did:key:z${base58btcEncode(prefixed)}`;
 }
 
-function base58btcDecode(input: string): Uint8Array {
+/** Decodes a base58btc string (no multibase `z` prefix) to raw bytes. */
+export function base58btcDecode(input: string): Uint8Array {
   let num = 0n;
   for (const char of input) {
     const index = BASE58_ALPHABET.indexOf(char);

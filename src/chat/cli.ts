@@ -21,6 +21,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import express, { type Express } from "express";
 import { didKeyFragment, didKeyToX25519PublicJwk, loadOrCreateIdentity, type Identity } from "./keys.js";
 import { resolveDidWeb } from "./didWeb.js";
+import { resolveDidPeer } from "./didPeer.js";
 import {
   packAuthcrypt,
   packAnoncrypt,
@@ -106,8 +107,9 @@ function didKeyDoc(did: string): DIDDoc {
 
 /**
  * A DidResolver that resolves the local identity's own DID, `did:key` peers
- * (reusing keys.ts's own logic via `didKeyDoc`), and `did:web` peers (via
- * `resolveDidWeb`). Any other DID method throws.
+ * (reusing keys.ts's own logic via `didKeyDoc`), `did:web` peers (via
+ * `resolveDidWeb`), and `did:peer:2...` peers (via `resolveDidPeer`, purely
+ * local — no network call). Any other DID method or did:peer numalgo throws.
  */
 function combinedResolver(identity: Identity): DidResolver {
   const ownDoc = didKeyDoc(identity.did);
@@ -125,6 +127,9 @@ function combinedResolver(identity: Identity): DidResolver {
       }
       if (method === "web") {
         return resolveDidWeb(did);
+      }
+      if (method === "peer") {
+        return resolveDidPeer(did);
       }
       throw new Error("unsupported DID method");
     },
