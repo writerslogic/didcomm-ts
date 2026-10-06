@@ -64,6 +64,13 @@ describe('wrapInForward / unwrapForward', () => {
     expect(next).toBe('did:example:recipient');
     expect(attachedMessage).toEqual(innerEncrypted);
 
+    // Regression: the plaintext `to` header must name who this envelope is
+    // actually encrypted to (the mediator), not `next` (the inner
+    // forwarding instruction) — a real crypto backend rejects the latter as
+    // a `to`-header/pack-recipient mismatch, even though this fake provider
+    // doesn't catch it.
+    expect(forwardPlaintext.to).toEqual(['did:example:mediator1#key-1']);
+
     // The mediator forwards attachedMessage on; the final recipient
     // anondecrypts it and recovers the original plaintext.
     const recovered = await crypto.decrypt(attachedMessage);

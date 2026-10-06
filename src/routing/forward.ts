@@ -89,7 +89,14 @@ export async function wrapInForward(
   const forwardMessage: PlaintextMessage = {
     id: options.id ?? randomUUID(),
     type: FORWARD_MESSAGE_TYPE,
-    to: [next],
+    // The plaintext `to` header must name who this envelope is actually
+    // encrypted to (the mediator, `recipientKeyId`) — NOT `next`, which is
+    // only the inner forwarding instruction carried in `body.next`. Getting
+    // this backwards passes real-crypto round trips with a fake test double
+    // but is rejected by didcomm-rust's pack_encrypted against a real
+    // mediator ("message.to value does not contain to value's DID") —
+    // caught via a live end-to-end test against mediator.wyvrn.app.
+    to: [recipientKeyId],
     body: forwardBody,
     attachments: [attachment],
   };
