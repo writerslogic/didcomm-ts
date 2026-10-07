@@ -9,9 +9,29 @@
     "build": "tsc -p .",
     "postbuild": "node -e \"require('fs').cpSync('src/chat/public','dist/chat/public',{recursive:true})\"",
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
-    "typecheck": "tsc -p . --noEmit"
+    "typecheck": "tsc -p . --noEmit",
+    "demo": "node scripts/demo.mjs",
+    "start": "node dist/chat/cli.js serve"
   },
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/writerslogic/didcomm-ts.git"
+  },
+  "homepage": "https://github.com/writerslogic/didcomm-ts#readme",
+  "bugs": {
+    "url": "https://github.com/writerslogic/didcomm-ts/issues"
+  },
+  "author": "Writerslogic",
+  "keywords": [
+    "didcomm",
+    "did",
+    "decentralized-identity",
+    "ssi",
+    "verifiable-credentials",
+    "mediator",
+    "did-peer"
+  ],
   "dependencies": {
     "cbor-x": "^1.5.9",
     "didcomm": "^0.4.1",

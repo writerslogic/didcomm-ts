@@ -17,6 +17,29 @@
  * through them before being sent to that same endpoint; with no mediators,
  * the envelope is sent as-is, as before.
  */
+
+// Suppress only Node's "ExperimentalWarning: Importing WebAssembly module
+// instances is an experimental feature" warning, which fires on startup
+// because of how the `didcomm` package's wasm-pack "bundler" target build
+// imports its compiled .wasm module (see wasm-transform.cjs and
+// jest.config.js for the same underlying mechanism in the test context).
+// Any other warning is re-emitted unchanged so it still reaches stderr.
+// Node installs its own default "warning" listener (which prints every
+// warning to stderr) before this module runs; adding a listener alongside
+// it does not suppress anything, since both listeners fire. So the default
+// listener must be removed first, and this replacement must re-print every
+// non-matching warning itself to preserve the default behavior for those.
+process.removeAllListeners("warning");
+process.on("warning", (warning: Error) => {
+  if (
+    warning.name === "ExperimentalWarning" &&
+    warning.message.includes("WebAssembly module instances")
+  ) {
+    return;
+  }
+  console.error(warning);
+});
+
 import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
