@@ -15,20 +15,6 @@ run end-to-end — `mediate` → `send` → `pickup` → `ack` — against
 production DIDComm v2 mediator. That is a full round trip through someone
 else's live crypto and someone else's live DID documents, not a mock.
 
-Testing against that real mediator surfaced and fixed three interop bugs that
-a self-consistent test suite would never have caught:
-
-- **Forward-wrap `to` header.** The plaintext forward envelope must name the
-  mediator being encrypted to, not the inner message's final recipient.
-- **Attachment encoding mismatch.** Real mediators deliver pickup messages as
-  `data.json`, not the `data.base64` this implementation assumed.
-- **Cross-DID-form secret lookup.** The secrets resolver failed to find a key
-  when a peer encrypted to this identity's `did:peer:2` form instead of its
-  `did:key` form — the same underlying key, addressed under a different DID.
-
-Each is a real bug found only by testing against a second, independently
-authored implementation — which is the point of building one.
-
 ## Architecture
 
 - **`src/core`** — authcrypt/anoncrypt envelope pack/unpack. A thin wrapper
