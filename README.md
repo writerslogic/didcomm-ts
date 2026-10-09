@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/writerslogic/didcomm-ts/main/docs/images/logo.png" alt="didcomm-ts logo" width="160">
+
 ### didcomm-ts
 
 An independent DIDComm v2 implementation in TypeScript with zero runtime dependencies, interop-tested against didcomm-rust, didcomm-python and a live mediator.
@@ -20,44 +22,103 @@ Requires Node.js 22.4 or later. ESM only.
 
 ## Usage
 
-You supply two resolvers: one that returns DID Documents and one that returns your private keys (JWK). They have the same shape as didcomm-rust's, so existing resolvers port directly.
+The API follows didcomm-rust's flow:
+
+- **Sender:** build a plaintext message object, then turn it into a DIDComm message with `packAuthcrypt`, `packAnoncrypt` or `packSigned`.
+- **Receiver:** call `unpack` (or `unpackSigned` for a signed-only message). It decrypts, verifies any signature, checks the sender and recipient against the plaintext `from` / `to`, and returns the plaintext message.
+
+### Resolvers
+
+You supply two resolvers: one that returns DID Documents and one that returns your private keys as JWKs. They have the same shape as didcomm-rust's `DIDResolver` / `SecretsResolver`, so existing resolvers port directly.
 
 ```ts
 import { packAuthcrypt, unpack, type DIDDoc, type Secret } from 'didcomm-ts';
 
-const docs = new Map<string, DIDDoc>([[alice.id, alice], [bob.id, bob]]);
+const docs = new Map<string, DIDDoc>([[alice.id, alice], [bob.id, bob], [mediator.id, mediator]]);
 const did = { resolve: async (id: string) => docs.get(id) ?? null };
 const secretsFor = (owned: Secret[]) => ({
   get_secret: async (id: string) => owned.find((s) => s.id === id) ?? null,
   find_secrets: async (ids: string[]) => ids.filter((id) => owned.some((s) => s.id === id)),
 });
-
-// Alice -> Bob, sender-authenticated (ECDH-1PU+A256KW, A256CBC-HS512).
-const envelope = await packAuthcrypt(
-  {
-    id: crypto.randomUUID(),
-    typ: 'application/didcomm-plain+json',
-    type: 'https://didcomm.org/basicmessage/2.0/message',
-    from: alice.id,
-    to: [bob.id],
-    body: { content: 'hello' },
-  },
-  [bob.id],
-  alice.id,
-  { did, secrets: secretsFor(aliceSecrets) },
-);
-
-const { message, senderKey, recipientKey } = await unpack(envelope, { did, secrets: secretsFor(bobSecrets) });
 ```
 
-The same options also cover:
+The examples below assume each party's DID Doc lists an X25519 key under `keyAgreement` (`#key-x25519-1`) and an Ed25519 key under `authentication` (`#key-ed25519-1`), and that `message` is a plaintext message such as:
 
-- `packAnoncrypt(message, to, options)`: no sender identity. `anoncryptEnc` selects A256CBC-HS512 (default), A256GCM or XC20P.
-- `signBy: did`: an inner JWS for non-repudiation. `packSigned` / `unpackSigned` handle signed-only messages.
+```ts
+const message = {
+  id: crypto.randomUUID(),
+  typ: 'application/didcomm-plain+json',
+  type: 'https://didcomm.org/basicmessage/2.0/message',
+  from: alice.id,
+  to: [bob.id],
+  body: { content: 'hello' },
+};
+```
+
+### 1. Encrypted message, sender authenticated (authcrypt)
+
+Hides the content from everyone but the recipients, proves the sender to those recipients only, and protects integrity. Uses ECDH-1PU+A256KW with A256CBC-HS512.
+
+```ts
+const envelope = await packAuthcrypt(message, [bob.id], alice.id, { did, secrets: secretsFor(aliceSecrets) });
+const { message: received, senderKey, recipientKey } = await unpack(envelope, { did, secrets: secretsFor(bobSecrets) });
+// senderKey === 'did:example:alice#key-x25519-1', recipientKey === 'did:example:bob#key-x25519-1'
+```
+
+Add `signBy` to also sign the plaintext, so the sender can be proven to third parties (non-repudiation):
+
+```ts
+const envelope = await packAuthcrypt(message, [bob.id], alice.id, {
+  did,
+  secrets: secretsFor(aliceSecrets),
+  signBy: alice.id,
+});
+const { signedBy } = await unpack(envelope, { did, secrets: secretsFor(bobSecrets) });
+// signedBy === 'did:example:alice#key-ed25519-1'
+```
+
+### 2. Encrypted message, anonymous sender (anoncrypt)
+
+Confidentiality and integrity without revealing the sender (the plaintext must not carry `from`). Uses ECDH-ES+A256KW; `anoncryptEnc` picks A256CBC-HS512 (default), A256GCM or XC20P.
+
+```ts
+const { from, ...anonymous } = message;
+const envelope = await packAnoncrypt(anonymous, [bob.id], { did, secrets: secretsFor([]), anoncryptEnc: 'XC20P' });
+const { senderKey } = await unpack(envelope, { did, secrets: secretsFor(bobSecrets) });
+// senderKey === null
+```
+
+### 3. Signed, unencrypted message
+
+For when the origin must be provable to third parties, or the recipient isn't known in advance. The content is readable by anyone who receives it.
+
+```ts
+const jws = await packSigned(message, alice.id, { did, secrets: secretsFor(aliceSecrets) });
+const { message: verified, signedBy } = await unpackSigned(jws, { did, secrets: secretsFor([]) });
+```
+
+### 4. Through a mediator
+
+Forward wrapping is explicit: pack for the final recipient, then wrap the envelope once per mediator (`routing/2.0/forward`, anoncrypted to the mediator).
+
+```ts
+import { anoncryptProvider, routing } from 'didcomm-ts';
+
+const forwarded = await routing.wrapForwardChain(
+  JSON.parse(envelope as string),
+  ['did:example:mediator#key-x25519-1'],
+  bob.id,
+  anoncryptProvider({ did, secrets: secretsFor([]) }),
+);
+// POST JSON.stringify(forwarded) to the mediator's endpoint.
+```
+
+Other options on every pack call:
+
 - `encoding: 'cbor'`: a CBOR-encoded envelope. `unpack` detects JSON or CBOR automatically.
 - `attestation`: the multi-recipient trust gate (see `eatRecipientAttestation` in `didcomm-ts/attestation`).
 
-`unpack` also unwraps anoncrypt around authcrypt (protected sender) and a JWS inside a JWE, and checks that the plaintext `from` / `to` match the keys that actually encrypted and signed it.
+`unpack` also unwraps anoncrypt around authcrypt (protected sender). These examples run as tests in [`test/readme.example.test.ts`](https://github.com/writerslogic/didcomm-ts/blob/main/test/readme.example.test.ts).
 
 ### Entry points
 
@@ -73,6 +134,28 @@ Import only what you use. Every entry point is dependency-free and side-effect-f
 | `didcomm-ts/provenance` | A C2PA manifest reference carried in an attachment |
 
 To forward through a mediator, wrap the packed envelope with `wrapForwardChain(envelope, mediators, recipientDid, anoncryptProvider({ did, secrets }))`.
+
+## Supported algorithms
+
+| | Curves | Algorithms |
+| --- | --- | --- |
+| Key agreement | X25519, P-256, P-384, P-521, secp256k1 | ECDH-1PU+A256KW (authcrypt), ECDH-ES+A256KW (anoncrypt) |
+| Content encryption | | A256CBC-HS512 (authcrypt and anoncrypt; the only option for authcrypt), A256GCM and XC20P (anoncrypt only) |
+| Signing | Ed25519, P-256, secp256k1 | EdDSA, ES256, ES256K |
+
+Ed25519 keys listed under `keyAgreement` are converted to X25519 (RFC 7748). didcomm-rust encrypts only to X25519 and P-256; P-384 and P-521 are cross-tested against didcomm-python; secp256k1 key agreement has no external counterparty tested.
+
+## Assumptions and limitations
+
+- Your application implements the DID and secrets resolvers. Resolving DID methods (`did:web`, `did:peer`, ...) is outside the library; the chat demo in `src/chat` has examples.
+- Key material:
+  - Public keys: `publicKeyJwk`, or `publicKeyMultibase` for X25519 and Ed25519 keys. `publicKeyBase58` is not supported.
+  - Secrets: `privateKeyJwk` only. Each secret's `id` must equal the key ID of the matching verification method.
+  - Key IDs should be absolute DID URLs (`did:example:alice#key-1`). Verification methods that live in another DID Document are not supported.
+- One envelope can be shared by several keys of a **single** recipient DID (e.g. one key per device). Distinct recipient DIDs need one pack call each, as with didcomm-rust.
+- Forward wrapping is not automatic: use `routing.wrapForwardChain` (above). Passing `forward: true` throws.
+- Not yet implemented: DID rotation (the `from_prior` header), and packing or unpacking plaintext (unenveloped) messages; `unpack` requires an encrypted or signed envelope.
+- Node.js only: the library is built on `node:crypto` and `node:http`.
 
 ## Interoperability
 
@@ -131,6 +214,16 @@ npm run bench                 # throughput vs didcomm-rust (WASM)
 ```
 
 didcomm-rust and didcomm-python are development dependencies only: they are the counterparties for the interop tests.
+
+## Contributing
+
+Pull requests are welcome. Before opening one:
+
+- `npm run typecheck` and `npm run build` succeed.
+- `npm test` passes, including the didcomm-rust and didcomm-python interop suites (install [uv](https://docs.astral.sh/uv/) for the Python counterparty; CI sets `DIDCOMM_TS_REQUIRE_INTEROP=1` so it can't be skipped).
+- Library code under `src/` (except the `src/chat` demo) imports only `node:` built-ins; `test/pure.independence.test.ts` enforces this.
+- New behavior comes with tests; protocol or crypto changes need a known-answer vector or a cross-implementation test.
+- Commit messages use `<type>: <imperative description>` (e.g. `fix: reject truncated GCM tags`).
 
 ## License
 
