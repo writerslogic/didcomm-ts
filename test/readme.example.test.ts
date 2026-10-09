@@ -7,9 +7,12 @@ import {
   anoncryptProvider,
   packAnoncrypt,
   packAuthcrypt,
+  packFromPrior,
+  packPlaintext,
   packSigned,
   routing,
   unpack,
+  unpackPlaintext,
   unpackSigned,
   type DIDDoc,
   type PlaintextMessage,
@@ -42,9 +45,10 @@ function party(name: string): { doc: DIDDoc; secrets: Secret[] } {
 const { doc: alice, secrets: aliceSecrets } = party('alice');
 const { doc: bob, secrets: bobSecrets } = party('bob');
 const { doc: mediator, secrets: mediatorSecrets } = party('mediator');
+const { doc: oldAlice, secrets: oldAliceSecrets } = party('old-alice');
 
 // --- README snippet: resolvers ---
-const docs = new Map<string, DIDDoc>([[alice.id, alice], [bob.id, bob], [mediator.id, mediator]]);
+const docs = new Map<string, DIDDoc>([[alice.id, alice], [bob.id, bob], [mediator.id, mediator], [oldAlice.id, oldAlice]]);
 const did = { resolve: async (id: string) => docs.get(id) ?? null };
 const secretsFor = (owned: Secret[]) => ({
   get_secret: async (id: string) => owned.find((s) => s.id === id) ?? null,
@@ -122,4 +126,31 @@ test('README: forward through a mediator', async () => {
   expect(next).toBe(bob.id);
   const { message: received } = await unpack(JSON.stringify(attachedMessage), { did, secrets: secretsFor(bobSecrets) });
   expect(received.body).toEqual({ content: 'hello' });
+});
+
+test('README: DID rotation', async () => {
+  const msg = message();
+  // --- README snippet: from_prior ---
+  const { jwt } = await packFromPrior(
+    { iss: oldAlice.id, sub: alice.id, iat: Math.floor(Date.now() / 1000) },
+    null,
+    { did, secrets: secretsFor(oldAliceSecrets) },
+  );
+  const envelope = await packAuthcrypt({ ...msg, from_prior: jwt }, [bob.id], alice.id, {
+    did,
+    secrets: secretsFor(aliceSecrets),
+  });
+  const { fromPrior, fromPriorIssuerKid } = await unpack(envelope, { did, secrets: secretsFor(bobSecrets) });
+  // --- end snippet ---
+  expect(fromPrior).toMatchObject({ iss: oldAlice.id, sub: alice.id });
+  expect(fromPriorIssuerKid).toBe('did:example:old-alice#key-ed25519-1');
+});
+
+test('README: plaintext', async () => {
+  const msg = message();
+  // --- README snippet: plaintext ---
+  const json = packPlaintext(msg);
+  const { message: parsed } = await unpackPlaintext(json, { did });
+  // --- end snippet ---
+  expect(parsed.id).toBe(msg.id);
 });

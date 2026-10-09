@@ -9,25 +9,24 @@ import type { AnoncryptProvider, EncryptedMessage, PlaintextMessage as ForwardPl
 import { detectEnvelopeEncoding, encodeEnvelope, toPackedJson } from '../encoding.js';
 import {
   resolveRecipientKeyIds,
-  type DIDDoc,
   type DidResolver,
   type PackOptions,
   type PlaintextMessage,
-  type SecretsResolver,
   type UnpackResolvers,
   type UnpackResult,
-  type VerificationMethod,
 } from '../types.js';
 import { fromUtf8, utf8 } from './bytes.js';
+import { didOf, findKey, loadSecret, resolveDoc } from './resolve.js';
+import { unpackFromPrior, type FromPrior } from './fromPrior.js';
+
+const PLAIN_TYP = 'application/didcomm-plain+json';
 import type { ContentEnc } from './content.js';
 import { decryptJwe, encryptJwe, isJwe, parseJwe, type JweRecipient, type JweSender } from './jwe.js';
 import { isJws, jwsSignerKid, signJws, verifyJws } from './jws.js';
 import {
-  privateKeyFromSecret,
   publicKeyFromVerificationMethod,
   toKeyAgreementPrivate,
   toKeyAgreementPublic,
-  type PrivateKey,
   type PublicKey,
 } from './keys.js';
 
@@ -36,43 +35,19 @@ export interface PurePackOptions extends PackOptions {
   anoncryptEnc?: ContentEnc;
 }
 
-export interface PureUnpackResult extends UnpackResult {
+/** DID rotation details, present when the message carried a valid `from_prior` header. */
+export interface FromPriorResult {
+  fromPrior: FromPrior | null;
+  /** The prior DID's key that signed `from_prior`. */
+  fromPriorIssuerKid: string | null;
+}
+
+export interface PureUnpackResult extends UnpackResult, FromPriorResult {
   /** Signer kid when the plaintext was wrapped in a JWS, otherwise null. */
   signedBy: string | null;
 }
 
 const MAX_ENVELOPE_LAYERS = 3;
-
-function didOf(didOrKid: string): string {
-  return didOrKid.split('#')[0];
-}
-
-async function resolveDoc(resolver: DidResolver, did: string): Promise<DIDDoc> {
-  const doc = await resolver.resolve(did);
-  if (!doc) throw new Error(`DID could not be resolved: ${did}`);
-  return doc;
-}
-
-function matchesKid(reference: string, kid: string, did: string): boolean {
-  return reference === kid || (reference.startsWith('#') && `${did}${reference}` === kid);
-}
-
-/** Finds `kid` among the doc's verification methods, requiring it to be listed under `relationship`. */
-function findKey(doc: DIDDoc, kid: string, relationship: 'keyAgreement' | 'authentication'): VerificationMethod {
-  const did = didOf(kid);
-  if (!doc[relationship].some((ref) => matchesKid(ref, kid, did))) {
-    throw new Error(`${kid} is not listed under ${relationship} in ${doc.id}`);
-  }
-  const vm = doc.verificationMethod.find((candidate) => matchesKid(candidate.id, kid, did));
-  if (!vm) throw new Error(`Verification method not found: ${kid}`);
-  return vm;
-}
-
-async function loadSecret(secrets: SecretsResolver, kid: string): Promise<PrivateKey> {
-  const secret = await secrets.get_secret(kid);
-  if (!secret) throw new Error(`Secret not found: ${kid}`);
-  return privateKeyFromSecret(secret);
-}
 
 function assertAddressing(message: PlaintextMessage, recipientDid: string, senderDid: string | null): void {
   if (message.to !== undefined && !message.to.map(didOf).includes(recipientDid)) {
@@ -186,11 +161,27 @@ async function senderPublicKey(resolver: DidResolver, skid: string): Promise<Pub
   return toKeyAgreementPublic(publicKeyFromVerificationMethod(findKey(doc, skid, 'keyAgreement')));
 }
 
-interface Unwrapped {
+interface Unwrapped extends FromPriorResult {
   message: PlaintextMessage;
   recipientKey: string | null;
   senderKey: string | null;
   signedBy: string | null;
+}
+
+/** Validates plaintext structure, and verifies `from_prior` against the message's `from` when present. */
+async function checkPlaintext(message: unknown, did: DidResolver): Promise<FromPriorResult & { message: PlaintextMessage }> {
+  const m = message as PlaintextMessage;
+  if (typeof m !== 'object' || m === null || Array.isArray(m) || typeof m.id !== 'string' || typeof m.type !== 'string') {
+    throw new Error('Not a DIDComm plaintext message (requires string `id` and `type`)');
+  }
+  if (m.typ !== undefined && m.typ !== PLAIN_TYP) throw new Error(`Unexpected plaintext typ: ${String(m.typ)}`);
+  if (m.from_prior === undefined) return { message: m, fromPrior: null, fromPriorIssuerKid: null };
+  if (typeof m.from_prior !== 'string') throw new Error('from_prior must be a compact JWT string');
+  const { fromPrior, issuerKid } = await unpackFromPrior(m.from_prior, did);
+  if (m.from === undefined || didOf(m.from) !== fromPrior.sub) {
+    throw new Error('from_prior `sub` does not match the message `from`');
+  }
+  return { message: m, fromPrior, fromPriorIssuerKid: issuerKid };
 }
 
 /** Peels JWE/JWS layers (anoncrypt around authcrypt, a JWS inside a JWE) down to the plaintext. */
@@ -227,17 +218,14 @@ async function unwrap(envelope: string | Uint8Array, resolvers: UnpackResolvers)
     }
   }
 
-  const message = current as PlaintextMessage;
-  if (typeof message !== 'object' || message === null || typeof message.id !== 'string' || typeof message.type !== 'string') {
-    throw new Error('Unpacked payload is not a DIDComm plaintext message');
-  }
+  const { message, fromPrior, fromPriorIssuerKid } = await checkPlaintext(current, resolvers.did);
   if (recipientKey !== null) {
     assertAddressing(message, didOf(recipientKey), senderKey === null ? null : didOf(senderKey));
   }
   if (signedBy !== null && message.from !== undefined && didOf(message.from) !== didOf(signedBy)) {
     throw new Error(`Plaintext "from" ${message.from} does not match the signer ${signedBy}`);
   }
-  return { message, recipientKey, senderKey, signedBy };
+  return { message, recipientKey, senderKey, signedBy, fromPrior, fromPriorIssuerKid };
 }
 
 /**
@@ -245,19 +233,44 @@ async function unwrap(envelope: string | Uint8Array, resolvers: UnpackResolvers)
  * anoncrypt around authcrypt (protected sender) and/or a JWS inside the JWE.
  */
 export async function unpack(envelope: string | Uint8Array, resolvers: UnpackResolvers): Promise<PureUnpackResult> {
-  const { message, recipientKey, senderKey, signedBy } = await unwrap(envelope, resolvers);
-  if (recipientKey === null) throw new Error('Envelope is not encrypted; use unpackSigned');
-  return { message, senderKey, recipientKey, signedBy };
+  const { recipientKey, ...rest } = await unwrap(envelope, resolvers);
+  if (recipientKey === null) throw new Error('Envelope is not encrypted; use unpackSigned or unpackPlaintext');
+  return { ...rest, recipientKey };
 }
 
 /** Verifies a signed-only (JWS) message and returns its plaintext and signer kid. */
 export async function unpackSigned(
   envelope: string | Uint8Array,
   resolvers: UnpackResolvers,
-): Promise<{ message: PlaintextMessage; signedBy: string }> {
-  const { message, recipientKey, signedBy } = await unwrap(envelope, resolvers);
+): Promise<{ message: PlaintextMessage; signedBy: string } & FromPriorResult> {
+  const { message, recipientKey, signedBy, fromPrior, fromPriorIssuerKid } = await unwrap(envelope, resolvers);
   if (recipientKey !== null || signedBy === null) throw new Error('Envelope is not a signed-only message');
-  return { message, signedBy };
+  return { message, signedBy, fromPrior, fromPriorIssuerKid };
+}
+
+/**
+ * Serializes a plaintext message (no protection: no confidentiality,
+ * integrity or sender authentication). Validates its structure first.
+ */
+export function packPlaintext(plaintextMessage: PlaintextMessage): string {
+  const m = plaintextMessage as unknown as Record<string, unknown>;
+  if (typeof m.id !== 'string' || typeof m.type !== 'string') throw new Error('Plaintext requires string `id` and `type`');
+  if (m.typ !== undefined && m.typ !== PLAIN_TYP) throw new Error(`Unexpected plaintext typ: ${String(m.typ)}`);
+  return JSON.stringify({ ...plaintextMessage, typ: PLAIN_TYP });
+}
+
+/**
+ * Parses an unenveloped plaintext message, verifying `from_prior` if present.
+ * Rejects encrypted or signed envelopes so callers can't mistake them for
+ * plaintext; use `unpack` / `unpackSigned` for those.
+ */
+export async function unpackPlaintext(
+  envelope: string | Uint8Array,
+  resolvers: Pick<UnpackResolvers, 'did'>,
+): Promise<{ message: PlaintextMessage } & FromPriorResult> {
+  const parsed: unknown = JSON.parse(toPackedJson(envelope, detectEnvelopeEncoding(envelope)));
+  if (isJwe(parsed) || isJws(parsed)) throw new Error('Envelope is encrypted or signed; use unpack or unpackSigned');
+  return checkPlaintext(parsed, resolvers.did);
 }
 
 /** An `AnoncryptProvider` for `routing.wrapInForward` backed by the pure packer. */

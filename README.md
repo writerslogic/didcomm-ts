@@ -113,6 +113,41 @@ const forwarded = await routing.wrapForwardChain(
 // POST JSON.stringify(forwarded) to the mediator's endpoint.
 ```
 
+### 5. DID rotation (`from_prior`)
+
+When Alice rotates to a new DID, her first message from the new DID can carry a `from_prior` JWT signed by a key of the old DID. `unpack` verifies it and reports the rotation.
+
+```ts
+import { packFromPrior } from 'didcomm-ts';
+
+const { jwt } = await packFromPrior(
+  { iss: oldAlice.id, sub: alice.id, iat: Math.floor(Date.now() / 1000) },
+  null, // or a specific authentication key ID of the old DID
+  { did, secrets: secretsFor(oldAliceSecrets) },
+);
+const envelope = await packAuthcrypt({ ...message, from_prior: jwt }, [bob.id], alice.id, {
+  did,
+  secrets: secretsFor(aliceSecrets),
+});
+const { fromPrior, fromPriorIssuerKid } = await unpack(envelope, { did, secrets: secretsFor(bobSecrets) });
+// fromPrior.iss === oldAlice.id, fromPrior.sub === alice.id
+```
+
+`unpack` requires `sub` to equal the message's `from`, `iss` to be the DID of the signing key, and enforces `exp` / `nbf`.
+
+### 6. Plaintext message
+
+No envelope at all: no confidentiality, integrity or sender authentication.
+
+```ts
+import { packPlaintext, unpackPlaintext } from 'didcomm-ts';
+
+const json = packPlaintext(message);
+const { message: parsed } = await unpackPlaintext(json, { did });
+```
+
+`unpack` and `unpackSigned` refuse plaintext, and `unpackPlaintext` refuses envelopes, so a receiver can't mistake one for the other.
+
 Other options on every pack call:
 
 - `encoding: 'cbor'`: a CBOR-encoded envelope. `unpack` detects JSON or CBOR automatically.
@@ -126,7 +161,7 @@ Import only what you use. Every entry point is dependency-free and side-effect-f
 
 | Import | Contents |
 | --- | --- |
-| `didcomm-ts` | Envelope API (`packAuthcrypt`, `packAnoncrypt`, `packSigned`, `unpack`, `unpackSigned`, `anoncryptProvider`, resolver and message types), plus `routing`, `transport`, `attestation` and `provenance` namespaces |
+| `didcomm-ts` | Envelope API (`packAuthcrypt`, `packAnoncrypt`, `packSigned`, `packPlaintext`, `unpack`, `unpackSigned`, `unpackPlaintext`, `packFromPrior`, `unpackFromPrior`, `anoncryptProvider`, resolver and message types), plus `routing`, `transport`, `attestation` and `provenance` namespaces |
 | `didcomm-ts/core` | Envelope API only |
 | `didcomm-ts/routing` | `routing/2.0/forward` wrapping (`wrapInForward`, `wrapForwardChain`) and `selectRoutingPath` over a DID Doc's `DIDCommMessaging` services |
 | `didcomm-ts/transport` | `listenHttp` / `createHttpHandler` / `sendHttp` (`node:http`) and `listenWebSocket` / `connectWebSocket` (RFC 6455 server, built-in client) |
@@ -154,14 +189,15 @@ Ed25519 keys listed under `keyAgreement` are converted to X25519 (RFC 7748). did
   - Key IDs should be absolute DID URLs (`did:example:alice#key-1`). Verification methods that live in another DID Document are not supported.
 - One envelope can be shared by several keys of a **single** recipient DID (e.g. one key per device). Distinct recipient DIDs need one pack call each, as with didcomm-rust.
 - Forward wrapping is not automatic: use `routing.wrapForwardChain` (above). Passing `forward: true` throws.
-- Not yet implemented: DID rotation (the `from_prior` header), and packing or unpacking plaintext (unenveloped) messages; `unpack` requires an encrypted or signed envelope.
+- `from_prior` verification requires `iss` to be the DID of the signing key and enforces `exp` / `nbf` (`unpackFromPrior(jwt, did, null)` skips the time checks, e.g. for archived messages).
+- base64url values must be canonical (unused trailing bits zero), as didcomm-rust requires; other encodings are rejected.
 - Node.js only: the library is built on `node:crypto` and `node:http`.
 
 ## Interoperability
 
 | Counterparty | Coverage | Result |
 | --- | --- | --- |
-| didcomm-rust (`didcomm` 0.4.1, WASM) | authcrypt, anoncrypt (3 content ciphers), signed, CBOR, multi-recipient; X25519 and P-256; both directions; its published test vectors | 33/33 + 8/8 vectors |
+| didcomm-rust (`didcomm` 0.4.1, WASM) | authcrypt, anoncrypt (3 content ciphers), signed, CBOR, multi-recipient, `from_prior`, plaintext; X25519 and P-256; both directions; its published test vectors | 36/36 cross-tests, 11/11 vectors |
 | didcomm-python 0.3.2 | authcrypt, anoncrypt (3 content ciphers), signed, protected sender; X25519, P-256, P-384, P-521; both directions | 22/22 |
 | mediator.wyvrn.app (live) | Coordinate Mediation, forward, Pickup 3.0, ack | 3/3 recorded runs |
 | aviarytech/didcomm 0.1.35 | anoncrypt X25519 | not interoperable: it predates the final DIDComm v2 JWE format, and didcomm-rust rejects it the same way |

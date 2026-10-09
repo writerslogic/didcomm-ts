@@ -15,10 +15,16 @@ export function b64urlEncode(bytes: Uint8Array): string {
   return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64url');
 }
 
-/** Strict base64url (no padding, no standard-alphabet characters). */
+/**
+ * Strict, canonical base64url: no padding, no standard-alphabet characters,
+ * and the unused trailing bits must be zero (RFC 4648 §3.5). Otherwise two
+ * different strings decode to the same bytes, making signed values malleable.
+ */
 export function b64urlDecode(text: string): Uint8Array {
-  if (!/^[A-Za-z0-9_-]*$/.test(text)) throw new Error('Invalid base64url');
-  return new Uint8Array(Buffer.from(text, 'base64url'));
+  if (!/^[A-Za-z0-9_-]*$/.test(text) || text.length % 4 === 1) throw new Error('Invalid base64url');
+  const bytes = Buffer.from(text, 'base64url');
+  if (bytes.toString('base64url') !== text) throw new Error('Non-canonical base64url');
+  return new Uint8Array(bytes);
 }
 
 export function concatBytes(...parts: Uint8Array[]): Uint8Array {

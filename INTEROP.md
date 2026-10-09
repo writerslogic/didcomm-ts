@@ -29,6 +29,7 @@ versions: didcomm-rust via `didcomm` 0.4.1 (WASM), didcomm-python 0.3.2
 | didcomm-rust encrypted vectors: anoncrypt XC20P (X25519, P-256), authcrypt (X25519, P-256) | didcomm-rust `src/test_vectors` @ 4388350 | all 4 decrypt |
 | didcomm-rust signed vectors: EdDSA, ES256, ES256K | same | all 4 verify |
 | Invalid epk point, tampered ciphertext | same | rejected |
+| didcomm-rust `from_prior` JWTs: valid, malformed, bad signature | same | valid one verifies; both invalid ones rejected (`test/fromPrior.test.ts`) |
 
 CBOR (`test/cbor.test.ts`, 41 tests) is checked against RFC 8949 Appendix A
 plus malformed-input cases (truncation, oversized lengths, indefinite
@@ -50,6 +51,11 @@ directions unless noted.
 | Authcrypt + EdDSA JWS (non-repudiation) | pass | pass |
 | CBOR-encoded authcrypt | pass | pass |
 | One envelope to 3 keyAgreement keys, each member decrypts in rust | pass (X25519) | |
+
+DID rotation and plaintext (`test/fromPrior.test.ts`): a `from_prior` JWT packed
+by didcomm-ts inside an authcrypt envelope is verified by didcomm-rust's
+`Message.unpack`; one packed by didcomm-rust's `FromPrior.pack` is verified by
+didcomm-ts; didcomm-rust parses didcomm-ts plaintext messages.
 
 didcomm-rust encrypts only to X25519 and P-256, so P-384/P-521 have no rust cell.
 
@@ -93,6 +99,20 @@ Its `@aviarytech/did-core` dependency also fails at runtime for
 `JsonWebKey2020` methods, so the probe wraps keys with
 `@aviarytech/crypto-core`'s `JsonWebKey` directly; aviarytech's JWE code runs
 unmodified.
+
+## `from_prior` verification notes
+
+- `FROM_PRIOR_JWT_INVALID_SIGNATURE` differs from the valid vector only in the
+  unused padding bits of the signature's last base64url character; both decode
+  to identical bytes. didcomm-rust rejects it because its decoder requires
+  canonical base64url. didcomm-ts now does the same for every base64url value,
+  so a signed value has exactly one valid encoding.
+- The valid vector has `exp` (1234) before `nbf` (12345), so no clock time
+  satisfies both; didcomm-rust doesn't check times. didcomm-ts enforces them in
+  `unpack` and verifies the vector with `unpackFromPrior(jwt, did, null)`.
+- didcomm-ts requires `iss` to be the DID of the key that signed the JWT and
+  rejects a `from_prior` signed by any other DID's key (tested with a forged
+  JWT).
 
 ## Live mediator round trip
 

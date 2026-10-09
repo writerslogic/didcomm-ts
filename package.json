@@ -1,6 +1,6 @@
 {
   "name": "didcomm-ts",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Independent DIDComm v2 implementation in TypeScript: authcrypt/anoncrypt/signed messages, routing, mediation and pickup, interop-tested against didcomm-rust and didcomm-python",
   "type": "module",
   "main": "dist/index.js",

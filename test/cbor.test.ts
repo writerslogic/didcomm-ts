@@ -82,3 +82,11 @@ test('CBOR envelopes are plain RFC 8949 that another decoder (cbor-x) reads iden
 test('CBOR envelopes with non-JSON values are rejected', () => {
   expect(() => toPackedJson(encodeCbor({ iv: new Uint8Array([1]) }), 'cbor')).toThrow('no JSON equivalent');
 });
+
+test('base64url decoding is canonical-only', async () => {
+  const { b64urlDecode } = await import('../src/core/pure/bytes.js');
+  expect(b64urlDecode('AQ')).toEqual(new Uint8Array([1]));
+  expect(() => b64urlDecode('AR')).toThrow('Non-canonical');
+  expect(() => b64urlDecode('A')).toThrow('Invalid base64url');
+  expect(() => b64urlDecode('AQ==')).toThrow('Invalid base64url');
+});

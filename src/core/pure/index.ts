@@ -3,3 +3,4 @@ export * from './envelope.js';
 export * from '../types.js';
 export { detectEnvelopeEncoding } from '../encoding.js';
 export type { ContentEnc } from './content.js';
+export { packFromPrior, unpackFromPrior, type FromPrior } from './fromPrior.js';
