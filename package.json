@@ -1,7 +1,7 @@
 {
-  "name": "@writerslogic/didcomm-ts",
+  "name": "didcomm-ts",
   "version": "0.1.0",
-  "description": "A second DIDComm v2.x implementation in TypeScript, interoperable with chat.wyvrn.app",
+  "description": "Independent DIDComm v2 implementation in TypeScript: authcrypt/anoncrypt/signed messages, routing, mediation and pickup, interop-tested against didcomm-rust and didcomm-python",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,14 +10,31 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./pure": {
-      "types": "./dist/core/pure/index.d.ts",
-      "import": "./dist/core/pure/index.js"
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js"
+    },
+    "./routing": {
+      "types": "./dist/routing/index.d.ts",
+      "import": "./dist/routing/index.js"
+    },
+    "./transport": {
+      "types": "./dist/transport/index.d.ts",
+      "import": "./dist/transport/index.js"
+    },
+    "./attestation": {
+      "types": "./dist/attestation/index.d.ts",
+      "import": "./dist/attestation/index.js"
+    },
+    "./provenance": {
+      "types": "./dist/provenance/index.d.ts",
+      "import": "./dist/provenance/index.js"
     },
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "!dist/chat",
     "README.md",
     "INTEROP.md",
     "LICENSE"
@@ -30,8 +47,9 @@
     "demo": "node scripts/demo.mjs",
     "start": "node dist/chat/cli.js serve",
     "interop:aviary": "npm --prefix test/interop/aviary ci && node test/interop/aviary/probe.mjs",
-    "interop:live": "node scripts/live-interop.mjs",
-    "prepublishOnly": "npm run build"
+    "interop:live": "node scripts/live-interop.mjs --block-wasm",
+    "prepublishOnly": "npm run build",
+    "bench": "node scripts/bench.mjs"
   },
   "license": "Apache-2.0",
   "repository": {
@@ -52,26 +70,26 @@
     "mediator",
     "did-peer"
   ],
-  "dependencies": {
+  "devDependencies": {
+    "@babel/preset-env": "^7.29.7",
     "@noble/ciphers": "2.4.0",
     "@noble/curves": "2.4.0",
     "@noble/hashes": "2.4.0",
-    "cbor-x": "^1.5.9",
-    "didcomm": "^0.4.1",
-    "express": "^4.21.1",
-    "ws": "^8.18.0"
-  },
-  "devDependencies": {
-    "@babel/preset-env": "^7.29.7",
     "@types/express": "^4.17.21",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.7.5",
-    "@types/ws": "^8.5.12",
+    "cbor-x": "^1.5.9",
+    "didcomm": "^0.4.1",
+    "express": "^4.21.1",
     "jest": "^30.5.2",
     "ts-jest": "^29.4.14",
     "typescript": "^5.6.3"
   },
   "publishConfig": {
     "access": "public"
+  },
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.4"
   }
 }

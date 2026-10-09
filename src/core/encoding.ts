@@ -1,12 +1,12 @@
 /** JSON/CBOR envelope encoding shared by both crypto backends. */
 
-import { decode as cborDecode, encode as cborEncode } from 'cbor-x';
+import { decodeCbor, encodeCbor } from './cbor.js';
 import type { EnvelopeEncoding } from './types.js';
 
 export function encodeEnvelope(packedJson: string, encoding: EnvelopeEncoding): string | Uint8Array {
   if (encoding === 'json') return packedJson;
   const asObject = JSON.parse(packedJson);
-  return Uint8Array.from(cborEncode(asObject));
+  return encodeCbor(asObject);
 }
 
 /**
@@ -38,6 +38,11 @@ export function toPackedJson(envelope: string | Uint8Array, encoding: EnvelopeEn
     return typeof envelope === 'string' ? envelope : Buffer.from(envelope).toString('utf8');
   }
   const bytes = envelope instanceof Uint8Array ? envelope : Buffer.from(envelope as string, 'utf8');
-  const decoded = cborDecode(bytes);
-  return JSON.stringify(decoded);
+  // A DIDComm envelope is a JSON document; reject CBOR-only values rather than coercing them.
+  return JSON.stringify(decodeCbor(bytes), (_key, value: unknown) => {
+    if (value instanceof Map || value instanceof Uint8Array || typeof value === 'bigint' || (typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype)) {
+      throw new Error('CBOR envelope contains a value with no JSON equivalent');
+    }
+    return value;
+  });
 }

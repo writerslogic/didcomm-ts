@@ -1,10 +1,8 @@
 /**
- * Pure-TypeScript DIDComm v2 pack/unpack with the same API and resolver
- * contracts as `src/core/envelope.ts`, but no dependency on didcomm-rust:
- * JOSE is implemented here over noble (`./jwe.ts`, `./jws.ts`).
- *
+ * DIDComm v2 pack/unpack: authcrypt, anoncrypt and signed messages, with
+ * JOSE implemented in `./jwe.ts` and `./jws.ts` over `node:crypto`.
  * Recipient resolution, the single-DID multi-recipient rule, and the
- * attestation gate are shared with the WASM backend (`../types.ts`).
+ * attestation gate live in `../types.ts`.
  */
 
 import type { AnoncryptProvider, EncryptedMessage, PlaintextMessage as ForwardPlaintext } from '../../routing/forward.js';

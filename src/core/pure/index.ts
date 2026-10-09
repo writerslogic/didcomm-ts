@@ -1,5 +1,4 @@
-// Pure-TypeScript DIDComm v2 backend (no didcomm-rust/WASM). Published as the
-// `@writerslogic/didcomm-ts/pure` subpath so importing it never loads WASM.
+// DIDComm v2 envelope API, re-exported as the package's `core` entry point.
 export * from './envelope.js';
 export * from '../types.js';
 export { detectEnvelopeEncoding } from '../encoding.js';

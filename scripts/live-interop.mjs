@@ -9,11 +9,10 @@
  *
  * Usage:
  *   npm run build
- *   node scripts/live-interop.mjs [--backend pure|wasm] [--sender pure|wasm] [--receiver pure|wasm]
- *                                 [--mediator did:web:mediator.wyvrn.app] [--block-wasm]
+ *   node scripts/live-interop.mjs [--mediator did:web:mediator.wyvrn.app] [--block-wasm]
  *
- * --block-wasm installs a module hook that throws if `didcomm` is ever
- * resolved, proving a pure run never touched didcomm-rust.
+ * --block-wasm installs a module hook that throws if `didcomm` (didcomm-rust
+ * WASM, a dev dependency used only by the interop tests) is ever resolved.
  *
  * Exits 0 only if the sent message id is picked up, decrypted, and acked.
  */
@@ -30,9 +29,6 @@ const PICKUP_DELAY_MS = 1000;
 
 const { values: args } = parseArgs({
   options: {
-    backend: { type: 'string', default: 'pure' },
-    sender: { type: 'string' },
-    receiver: { type: 'string' },
     mediator: { type: 'string', default: 'did:web:mediator.wyvrn.app' },
     'block-wasm': { type: 'boolean', default: false },
   },
@@ -48,16 +44,7 @@ if (args['block-wasm']) {
   });
 }
 
-// Each backend is imported only if selected, so a pure-only run never loads didcomm (WASM).
-const BACKEND_PATHS = { pure: 'core/pure/index.js', wasm: 'core/index.js' };
-const senderName = args.sender ?? args.backend;
-const receiverName = args.receiver ?? args.backend;
-const backends = {};
-for (const name of new Set([senderName, receiverName])) {
-  if (!BACKEND_PATHS[name]) throw new Error(`unknown backend: ${name}`);
-  backends[name] = await import(join(DIST, BACKEND_PATHS[name]));
-}
-const backendFor = (name) => backends[name];
+const core = await import(join(DIST, 'core/index.js'));
 
 const { loadOrCreateIdentity, didKeyFragment, didKeyToX25519PublicJwk } = await import(join(DIST, 'chat/keys.js'));
 const { resolveDidWeb } = await import(join(DIST, 'chat/didWeb.js'));
@@ -70,7 +57,7 @@ const { sendHttp } = await import(join(DIST, 'transport/index.js'));
 
 const tempDirs = [];
 
-function party(backendName) {
+function party() {
   const dir = mkdtempSync(join(tmpdir(), 'didcomm-ts-live-'));
   tempDirs.push(dir);
   const identity = loadOrCreateIdentity(dir);
@@ -90,8 +77,7 @@ function party(backendName) {
     get_secret: async (id) => ({ id, type: 'JsonWebKey2020', privateKeyJwk: identity.secretJwk }),
     find_secrets: async (ids) => ids,
   };
-  const backend = backendFor(backendName);
-  return { identity, did, secrets, backend, ctx: { selfDid: identity.did, did, secrets, backend } };
+  return { identity, did, secrets, ctx: { selfDid: identity.did, did, secrets } };
 }
 
 function didKeyDoc(target) {
@@ -105,24 +91,9 @@ function didKeyDoc(target) {
   };
 }
 
-function anoncryptProvider(p) {
-  if (p.backend.anoncryptProvider) return p.backend.anoncryptProvider({ did: p.did, secrets: p.secrets });
-  return {
-    async encrypt(message, recipientKeyId) {
-      const packed = await p.backend.packAnoncrypt({ typ: 'application/didcomm-plain+json', ...message }, [recipientKeyId], p);
-      return JSON.parse(typeof packed === 'string' ? packed : new TextDecoder().decode(packed));
-    },
-    decrypt() {
-      throw new Error('not a mediator');
-    },
-  };
-}
-
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = {
   mediator: args.mediator,
-  senderBackend: senderName,
-  receiverBackend: receiverName,
   wasmBlocked: args['block-wasm'],
   startedAt: new Date().toISOString(),
   steps: [],
@@ -131,8 +102,8 @@ const step = (name, data) => log.steps.push({ step: name, at: new Date().toISOSt
 
 let exitCode = 1;
 try {
-  const receiver = party(receiverName);
-  const sender = party(senderName);
+  const receiver = party();
+  const sender = party();
 
   const grant = await requestMediation(args.mediator, receiver.ctx);
   const update = await updateRecipient(args.mediator, receiver.identity.did, 'add', receiver.ctx);
@@ -155,13 +126,13 @@ try {
     from: sender.identity.did,
     to: [receiverPeerDid],
     created_time: Math.floor(Date.now() / 1000),
-    body: { content: `didcomm-ts live interop ${senderName} -> ${receiverName}` },
+    body: { content: `didcomm-ts live interop` },
   };
-  const inner = await sender.backend.packAuthcrypt(message, [receiverPeerDid], sender.identity.did, sender);
+  const inner = await core.packAuthcrypt(message, [receiverPeerDid], sender.identity.did, sender);
   const peerDoc = await sender.did.resolve(receiverPeerDid);
   const [route] = selectRoutingPath({ id: peerDoc.id, service: peerDoc.service });
   if (!route || route.mediators.length === 0) throw new Error('receiver did:peer:2 has no mediator route');
-  const wrapped = await wrapForwardChain(JSON.parse(inner), route.mediators, receiverPeerDid, anoncryptProvider(sender));
+  const wrapped = await wrapForwardChain(JSON.parse(inner), route.mediators, receiverPeerDid, core.anoncryptProvider({ did: sender.did, secrets: sender.secrets }));
   const wire = new TextEncoder().encode(JSON.stringify(wrapped));
   const response = await sendHttp(route.endpoint, wire, 'application/didcomm-encrypted+json');
   step('send', {
@@ -182,7 +153,7 @@ try {
   }
   const received = [];
   for (const { attachmentId, envelopeBytes } of delivered) {
-    const result = await receiver.backend.unpack(envelopeBytes, { did: receiver.did, secrets: receiver.secrets });
+    const result = await core.unpack(envelopeBytes, { did: receiver.did, secrets: receiver.secrets });
     received.push({ attachmentId, messageId: result.message.id, senderKey: result.senderKey, recipientKey: result.recipientKey });
   }
   step('pickup', { delivered: received });

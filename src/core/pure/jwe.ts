@@ -7,10 +7,9 @@
  *   ECDH-1PU, over the content tag) and wraps the CEK with A256KW.
  */
 
-import { aeskw } from '@noble/ciphers/aes.js';
-import { randomBytes } from '@noble/ciphers/utils.js';
-import { sha256 } from '@noble/hashes/sha2.js';
-import { b64urlDecode, b64urlEncode, bytesEqual, fromUtf8, utf8 } from './bytes.js';
+import { randomBytes } from 'node:crypto';
+import { b64urlDecode, b64urlEncode, bytesEqual, fromUtf8, sha256, utf8 } from './bytes.js';
+import { aesKeyUnwrap, aesKeyWrap } from './content.js';
 import { contentParams, decryptContent, encryptContent, isContentEnc, type ContentEnc } from './content.js';
 import { deriveRecipientKek, deriveSenderKek, type KeyWrapAlg } from './kdf.js';
 import {
@@ -90,13 +89,13 @@ export function encryptJwe(
   const protectedB64 = b64urlEncode(utf8(JSON.stringify(header)));
 
   const params = contentParams(enc);
-  const cek = randomBytes(params.keyLength);
-  const iv = randomBytes(params.ivLength);
+  const cek = new Uint8Array(randomBytes(params.keyLength));
+  const iv = new Uint8Array(randomBytes(params.ivLength));
   const { ciphertext, tag } = encryptContent(enc, cek, iv, utf8(protectedB64), plaintext);
 
   const wrapped = recipients.map((recipient) => {
     const kek = deriveSenderKek({ alg, apu, apv, ccTag: tag }, epk, recipient.key, sender?.key);
-    const encryptedKey = aeskw(kek).encrypt(cek);
+    const encryptedKey = aesKeyWrap(kek, cek);
     kek.fill(0);
     return { header: { kid: recipient.kid }, encrypted_key: b64urlEncode(encryptedKey) };
   });
@@ -202,7 +201,7 @@ export function decryptJwe(parsed: ParsedJwe, recipient: JweSender, sender?: Pub
   );
   let cek: Uint8Array;
   try {
-    cek = aeskw(kek).decrypt(b64urlDecode(entry.encrypted_key));
+    cek = aesKeyUnwrap(kek, b64urlDecode(entry.encrypted_key));
   } catch {
     throw new Error('JWE key unwrap failed');
   } finally {

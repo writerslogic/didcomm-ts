@@ -8,8 +8,7 @@
  * to SuppPubInfo, so content must be encrypted before the CEK is wrapped.
  */
 
-import { sha256 } from '@noble/hashes/sha2.js';
-import { concatBytes, u32be, utf8 } from './bytes.js';
+import { concatBytes, sha256, u32be, utf8 } from './bytes.js';
 import { ecdh, type PrivateKey, type PublicKey } from './keys.js';
 
 export type KeyWrapAlg = 'ECDH-ES+A256KW' | 'ECDH-1PU+A256KW';

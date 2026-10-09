@@ -1,0 +1,114 @@
+{
+  "node": "v26.8.1",
+  "platform": "darwin arm64",
+  "cpu": "Apple M4",
+  "messageBytes": 1024,
+  "windowMs": 250,
+  "samples": 15,
+  "results": [
+    {
+      "curve": "X25519",
+      "mode": "authcrypt",
+      "opsPerSec": {
+        "tsPack": {
+          "median": 2243,
+          "min": 256,
+          "max": 3177
+        },
+        "rustPack": {
+          "median": 920,
+          "min": 409,
+          "max": 1567
+        },
+        "tsUnpack": {
+          "median": 2510,
+          "min": 611,
+          "max": 3983
+        },
+        "rustUnpack": {
+          "median": 1103,
+          "min": 427,
+          "max": 1539
+        }
+      }
+    },
+    {
+      "curve": "X25519",
+      "mode": "anoncrypt",
+      "opsPerSec": {
+        "tsPack": {
+          "median": 2677,
+          "min": 1330,
+          "max": 4097
+        },
+        "rustPack": {
+          "median": 1999,
+          "min": 1162,
+          "max": 2451
+        },
+        "tsUnpack": {
+          "median": 3704,
+          "min": 1784,
+          "max": 5094
+        },
+        "rustUnpack": {
+          "median": 1678,
+          "min": 642,
+          "max": 2480
+        }
+      }
+    },
+    {
+      "curve": "P-256",
+      "mode": "authcrypt",
+      "opsPerSec": {
+        "tsPack": {
+          "median": 1022,
+          "min": 719,
+          "max": 1217
+        },
+        "rustPack": {
+          "median": 94,
+          "min": 74,
+          "max": 131
+        },
+        "tsUnpack": {
+          "median": 867,
+          "min": 748,
+          "max": 1020
+        },
+        "rustUnpack": {
+          "median": 129,
+          "min": 81,
+          "max": 180
+        }
+      }
+    },
+    {
+      "curve": "P-256",
+      "mode": "anoncrypt",
+      "opsPerSec": {
+        "tsPack": {
+          "median": 1460,
+          "min": 800,
+          "max": 2079
+        },
+        "rustPack": {
+          "median": 210,
+          "min": 159,
+          "max": 295
+        },
+        "tsUnpack": {
+          "median": 1328,
+          "min": 850,
+          "max": 2104
+        },
+        "rustUnpack": {
+          "median": 197,
+          "min": 152,
+          "max": 248
+        }
+      }
+    }
+  ]
+}

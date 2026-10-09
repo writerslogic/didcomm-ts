@@ -1,15 +1,11 @@
 /**
  * DIDComm resolver contracts, message/option types, and recipient-key
- * resolution shared by both crypto backends (`envelope.ts` over didcomm-rust
- * WASM, and `pure/` over noble). Must not import `didcomm`: the pure backend
- * depends on this module.
+ * resolution (including the attestation gate) used by `core/pure`.
  */
 
 // ---------------------------------------------------------------------------
-// Resolver contracts, matching didcomm-rust's DIDResolver / SecretsResolver
-// (these are declared but not exported from didcomm's .d.ts, so we define our
-// own structurally-identical versions that callers implement and that we pass
-// straight through to the `didcomm` package).
+// Resolver contracts. Structurally identical to didcomm-rust's DIDResolver /
+// SecretsResolver, so resolvers written for either library work with both.
 // ---------------------------------------------------------------------------
 
 /** https://www.w3.org/TR/did-core/ */
@@ -168,8 +164,8 @@ export async function resolveRecipientKeyIds(
   if (controllers.size > 1) {
     throw new Error(
       'Recipients span more than one DID (distinct verificationMethod.controller values): ' +
-        `${[...controllers].join(', ')}. didcomm-rust's pack_encrypted only shares one CEK ` +
-        'across keyAgreement keys that belong to a single DID Doc (e.g. a group/multi-device ' +
+        `${[...controllers].join(', ')}. One envelope shares its CEK only across keyAgreement ` +
+        'keys that belong to a single DID Doc, as didcomm-rust does (e.g. a group/multi-device ' +
         "DID listing one key per member); pack separately per recipient DID for genuinely " +
         'distinct parties.',
     );

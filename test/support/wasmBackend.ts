@@ -35,11 +35,11 @@ import {
   type UnpackResolvers,
   type UnpackResult,
   type VerificationMethod,
-} from './types.js';
-import { detectEnvelopeEncoding, encodeEnvelope, toPackedJson } from './encoding.js';
+} from '../../src/core/types.js';
+import { detectEnvelopeEncoding, encodeEnvelope, toPackedJson } from '../../src/core/encoding.js';
 
-export * from './types.js';
-export { detectEnvelopeEncoding } from './encoding.js';
+export * from '../../src/core/types.js';
+export { detectEnvelopeEncoding } from '../../src/core/encoding.js';
 
 /**
  * Wraps a real DidResolver so that resolving `syntheticId` returns a synthetic

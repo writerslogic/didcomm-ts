@@ -12,9 +12,8 @@
  * old challenge fails against a new one.
  */
 
-import { sha256 } from '@noble/hashes/sha2.js';
 import type { RecipientKeyAttestation, VerificationMethod } from '../core/types.js';
-import { bytesEqual, concatBytes, utf8 } from '../core/pure/bytes.js';
+import { bytesEqual, concatBytes, sha256, utf8 } from '../core/pure/bytes.js';
 import { publicKeyFromVerificationMethod, publicKeyToJwk } from '../core/pure/keys.js';
 import { verifyEatToken, type EatClaims, type EatVerifier } from './eat.js';
 

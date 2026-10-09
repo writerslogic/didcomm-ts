@@ -7,7 +7,7 @@ import {
   type EatSigner,
   type EatVerifier,
 } from '../src/attestation/index.js';
-import * as wasm from '../src/core/envelope.js';
+import * as wasm from './support/wasmBackend.js';
 import * as pure from '../src/core/pure/index.js';
 import type { DIDDoc, PlaintextMessage, Secret, VerificationMethod } from '../src/core/types.js';
 

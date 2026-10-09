@@ -1,6 +1,6 @@
 // Probes interop with aviarytech/didcomm (@aviarytech/didcomm-core 0.1.35, the
 // only published version), which supports anoncrypt over X25519 only. Runs
-// both directions against the pure backend and, as a control, against
+// both directions against didcomm-ts and, as a control, against
 // didcomm-rust (WASM), and prints one JSON result per cell.
 // Usage (after `npm run build` at the repo root): node test/interop/aviary/probe.mjs
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
@@ -18,8 +18,27 @@ const { DIDCommCore } = require('@aviarytech/didcomm-core');
 const { JsonWebKey } = require('@aviarytech/crypto-core');
 const { Secret } = require('@aviarytech/did-secrets');
 const repo = join(here, '../../..');
-const pure = await import(join(repo, 'dist/core/pure/index.js'));
-const wasm = await import(join(repo, 'dist/core/envelope.js'));
+const didcommTs = await import(join(repo, 'dist/core/index.js'));
+// didcomm-rust (WASM) as a control, resolved from the repo's dev dependencies.
+const { Message } = await import(createRequire(join(repo, 'package.json')).resolve('didcomm'));
+const rust = {
+  async unpack(envelope, r) {
+    const [m] = await Message.unpack(envelope, r.did, r.secrets, { expect_decrypt_by_all_keys: false, unwrap_re_wrapping_forward: false });
+    try {
+      return { message: m.as_value() };
+    } finally {
+      m.free();
+    }
+  },
+  async packAnoncrypt(msg, to, r) {
+    const m = new Message(msg);
+    try {
+      return (await m.pack_encrypted(to[0], null, null, r.did, r.secrets, { forward: false }))[0];
+    } finally {
+      m.free();
+    }
+  },
+};
 
 const did = `did:example:bob${randomUUID().replace(/-/g, '')}`;
 const kid = `${did}#ka-1`;
@@ -67,7 +86,7 @@ const aviaryEnvelope = await aviary.packMessage(did, message());
 const aviaryHeader = JSON.parse(Buffer.from(aviaryEnvelope.protected, 'base64url').toString());
 console.log(JSON.stringify({ aviaryProtectedHeader: aviaryHeader, aviaryRecipientHeader: Object.keys(aviaryEnvelope.recipients[0].header) }));
 
-for (const [name, backend] of [['pure', pure], ['wasm', wasm]]) {
+for (const [name, backend] of [['didcomm-ts', didcommTs], ['didcomm-rust', rust]]) {
   await cell(`aviary -> ${name}`, async () => (await backend.unpack(JSON.stringify(aviaryEnvelope), ours)).message.id);
   await cell(`${name} -> aviary`, async () => {
     const packed = await backend.packAnoncrypt(message(), [did], { ...ours, anoncryptEnc: 'XC20P' });

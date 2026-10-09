@@ -1,8 +1,9 @@
 export {
-  createHttpReceiver,
+  createHttpHandler,
   listenHttp,
   sendHttp,
   type DidCommContentType,
+  type HttpHandlerOptions,
   type OnMessage,
 } from "./http.js";
 
@@ -12,4 +13,5 @@ export {
   type WsClient,
   type WsOnMessage,
   type WsServerHandle,
+  type WsServerOptions,
 } from "./websocket.js";

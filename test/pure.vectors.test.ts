@@ -5,8 +5,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { aeskw } from '@noble/ciphers/aes.js';
-import { encryptContent, decryptContent } from '../src/core/pure/content.js';
+import { aesKeyUnwrap, aesKeyWrap, decryptContent, encryptContent, hchacha20 } from '../src/core/pure/content.js';
 import { concatKdf } from '../src/core/pure/kdf.js';
 import { ecdh, privateKeyFromJwk, publicKeyFromJwk } from '../src/core/pure/keys.js';
 import { b64urlEncode, utf8 } from '../src/core/pure/bytes.js';
@@ -40,8 +39,40 @@ const resolvers = {
 describe('pure primitives (known-answer)', () => {
   test('AES-KW 256 (RFC 3394 §4.3)', () => {
     const kek = hex('000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F');
-    const wrapped = aeskw(kek).encrypt(hex('00112233445566778899aabbccddeeff'));
+    const wrapped = aesKeyWrap(kek, hex('00112233445566778899aabbccddeeff'));
     expect(toHex(wrapped)).toBe('64e8c3f9ce0f5ba263e9777905818a2a93c8191e7d6e8ae7');
+    expect(toHex(aesKeyUnwrap(kek, wrapped))).toBe('00112233445566778899aabbccddeeff');
+    wrapped[0] ^= 1;
+    expect(() => aesKeyUnwrap(kek, wrapped)).toThrow();
+  });
+
+  test('HChaCha20 (draft-irtf-cfrg-xchacha-03 §2.2.1)', () => {
+    const key = hex('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f');
+    expect(toHex(hchacha20(key, hex('000000090000004a0000000031415927')))).toBe(
+      '82413b4227b27bfed30e42508a877d73a0f9e4d58a74a853c12ec41326d3ecdc',
+    );
+  });
+
+  test('XChaCha20-Poly1305 / XC20P (draft-irtf-cfrg-xchacha-03 App. A.3.1)', () => {
+    const key = hex('808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f');
+    const iv = hex('404142434445464748494a4b4c4d4e4f5051525354555657');
+    const aad = hex('50515253c0c1c2c3c4c5c6c7');
+    const plaintext = hex(
+      '4c616469657320616e642047656e746c656d656e206f662074686520636c6173' +
+        '73206f66202739393a204966204920636f756c64206f6666657220796f75206f' +
+        '6e6c79206f6e652074697020666f7220746865206675747572652c2073756e73' +
+        '637265656e20776f756c642062652069742e',
+    );
+    const sealed = encryptContent('XC20P', key, iv, aad, plaintext);
+    expect(toHex(sealed.ciphertext)).toBe(
+      'bd6d179d3e83d43b9576579493c0e939572a1700252bfaccbed2902c21396cbb' +
+        '731c7f1b0b4aa6440bf3a82f4eda7e39ae64c6708c54c216cb96b72e1213b452' +
+        '2f8c9ba40db5d945b11b69b982c1bb9e3f3fac2bc369488f76b2383565d3fff9' +
+        '21f9664c97637da9768812f615c68b13b52e',
+    );
+    expect(toHex(sealed.tag)).toBe('c0875924c1c7987947deafd8780acf49');
+    expect(decryptContent('XC20P', key, iv, aad, sealed)).toEqual(plaintext);
+    expect(() => decryptContent('XC20P', key, iv, aad, { ...sealed, tag: sealed.tag.slice(0, 12) })).toThrow('16-byte tag');
   });
 
   test('A256CBC-HS512 (RFC 7518 App. B.3)', () => {

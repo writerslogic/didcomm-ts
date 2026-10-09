@@ -1,6 +1,7 @@
-// Top-level package entry: re-exports each module under its own namespace
-// so that sibling modules exporting same-named members never collide.
-export * as core from "./core/index.js";
+// Package entry: the envelope API at the top level, other modules as
+// namespaces (each also importable on its own subpath, e.g. didcomm-ts/routing)
+// so same-named members across modules never collide.
+export * from "./core/index.js";
 export * as routing from "./routing/index.js";
 export * as transport from "./transport/index.js";
 export * as attestation from "./attestation/index.js";

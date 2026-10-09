@@ -8,7 +8,7 @@
  * backends' `attestation` gate.
  */
 
-import { encode, decode } from 'cbor-x';
+import { CborTag, decodeCbor as decode, encodeCbor as encode } from '../core/cbor.js';
 
 /** Debug status of the device, per the EAT `dbgstat` claim. */
 export enum DebugStatus {
@@ -103,16 +103,9 @@ function mapToClaims(map: Map<number, unknown>): EatClaims | null {
  * Builds the RFC 8152 §4.4 "Signature1" structure bytes that are actually signed,
  * binding the signature to both the protected header and the payload so a tampered
  * header (e.g. a swapped alg/kid) is detected the same as a tampered payload.
- *
- * Inputs are coerced to Node `Buffer` before encoding: cbor-x tags a plain
- * `Uint8Array` with CBOR tag 64 (RFC 8746) to preserve its exact type across a
- * round trip, but leaves a `Buffer` untagged. `decode()` is not guaranteed to
- * hand back a `Buffer` for a nested byte string, so re-encoding its raw output
- * without normalizing first would silently produce different bytes on the
- * verify side than were actually signed on the build side.
  */
 function buildToBeSigned(protectedBytes: Uint8Array, payloadBytes: Uint8Array): Uint8Array {
-  return encode(['Signature1', Buffer.from(protectedBytes), Buffer.alloc(0), Buffer.from(payloadBytes)]);
+  return encode(['Signature1', protectedBytes, new Uint8Array(0), payloadBytes]);
 }
 
 /**
@@ -133,7 +126,7 @@ export async function buildEatToken(claims: EatClaims, signer: EatSigner): Promi
   const signature = await signer.sign(toBeSigned);
 
   const coseSign1 = [protectedBytes, unprotectedHeader, payloadBytes, signature];
-  return new Uint8Array(encode(coseSign1));
+  return encode(coseSign1);
 }
 
 /**
@@ -150,6 +143,8 @@ export async function verifyEatToken(
   } catch {
     return null;
   }
+  // COSE_Sign1_Tagged (RFC 9052 §4.2) wraps the same array in tag 18.
+  if (decoded instanceof CborTag && decoded.tag === 18) decoded = decoded.value;
   if (!Array.isArray(decoded) || decoded.length !== 4) return null;
   const [protectedBytes, , payloadBytes, signature] = decoded as unknown[];
   if (

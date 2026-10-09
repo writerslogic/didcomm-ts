@@ -1,97 +1,131 @@
-### @writerslogic/didcomm-ts
+### didcomm-ts
 
-A second DIDComm v2.x implementation, in TypeScript, built to interoperate with other DIDComm implementations (e.g. chat.wyvrn.app) rather than reuse one.
+An independent DIDComm v2 implementation in TypeScript with zero runtime dependencies, interop-tested against didcomm-rust, didcomm-python and a live mediator.
 
-[![CI](https://img.shields.io/github/actions/workflow/status/writerslogic/didcomm-ts/ci.yml?branch=main&label=CI)](https://github.com/writerslogic/didcomm-ts/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/writerslogic/didcomm-ts/blob/main/package.json)
+[![CI](https://img.shields.io/github/actions/workflow/status/writerslogic/didcomm-ts/ci.yml?branch=main&label=CI)](https://github.com/writerslogic/didcomm-ts/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/didcomm-ts)](https://www.npmjs.com/package/didcomm-ts) [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/writerslogic/didcomm-ts/blob/main/LICENSE)
 
-## Verified interop
+- **Independent.** The JOSE layer (ECDH-ES and ECDH-1PU + A256KW, ConcatKDF, A256CBC-HS512 / A256GCM / XC20P, EdDSA / ES256 / ES256K), CBOR codec, DID key handling and HTTP/WebSocket transports are implemented here over `node:crypto`. It does not wrap didcomm-rust.
+- **Zero runtime dependencies.** `npm install didcomm-ts` installs one package. A test fails the build if any published module imports anything but `node:` built-ins.
+- **Interoperable.** Envelopes round-trip in both directions with didcomm-rust and didcomm-python across X25519, P-256, P-384 and P-521, and the library completes mediate → forward → pickup → ack against an independent production mediator. See [INTEROP.md](./INTEROP.md).
+- **Fast.** 1.3–2.8× the throughput of didcomm-rust's WASM build on X25519 and 6.5–10.9× on P-256 (see [Performance](#performance)).
+- **Attestation-gated multi-recipient packing.** Optionally require each recipient key to present an EAT (RFC 9711) device-attestation token bound to that key and a fresh challenge before it joins a shared envelope.
 
-The mediation client, pickup client, and forward-routing wrapper have been
-run end-to-end — `mediate` → `send` → `pickup` → `ack` — against
-[mediator.wyvrn.app](https://mediator.wyvrn.app), an independently-built
-production DIDComm v2 mediator. That is a full round trip through someone
-else's live crypto and someone else's live DID documents, not a mock.
-
-## Architecture
-
-- **`src/core`** — authcrypt/anoncrypt envelope pack/unpack. A thin wrapper
-  over the `didcomm` npm package (WASM bindings over `didcomm-rust`),
-  supporting JSON (JWE) and CBOR-encoded JWE envelopes, auto-detected on unpack.
-  **Multi-recipient note:** one shared-CEK envelope covers every
-  `keyAgreement` key that belongs to a *single* recipient DID Doc (e.g. one
-  DID listing a key per device) — `didcomm-rust`'s `pack_encrypted` rejects
-  key sets spanning more than one DID's `verificationMethod.controller`. Pack
-  separately per DID for genuinely distinct parties.
-- **`src/core/pure`** (`@writerslogic/didcomm-ts/pure`) — the same API with
-  no WASM: an independent JOSE implementation (ECDH-ES/ECDH-1PU + A256KW,
-  A256CBC-HS512/A256GCM/XC20P, EdDSA/ES256/ES256K) over the noble libraries,
-  for X25519, P-256, P-384, P-521 and secp256k1 keys. Cross-tested against
-  didcomm-rust and didcomm-python; see [INTEROP.md](./INTEROP.md).
-- **`src/routing`** — DIDComm forward-routing wrap/unwrap, and
-  `selectRoutingPath` for picking the right mediator chain among a DID Doc's
-  multiple `DIDCommMessaging` service entries (e.g. one entry per device).
-- **`src/transport`** — HTTP (Express) and WebSocket transports.
-- **`src/attestation`** — *optional extension.* IETF RATS (RFC 9334) device
-  attestation evidence carried as an EAT (RFC 9711) CWT, COSE-signed.
-  `eatRecipientAttestation` plugs it into both backends' `attestation`
-  option, so every recipient key must present a token bound to that key and a
-  fresh verifier challenge before it is added to a multi-recipient envelope.
-- **`src/provenance`** — *optional extension.* A minimal C2PA manifest
-  *reference* carried through a DIDComm attachment's `data` extension field.
-  Does not implement C2PA manifest creation, signing, or validation.
-- **`src/chat`** — a CLI chat demo (`send` / `listen` / `serve` / `mediate` /
-  `pickup`) wiring the above together for interop testing against other
-  DIDComm v2 implementations. Supports `did:key`, `did:web` (resolved over
-  HTTPS), `did:peer:2`, and long-form `did:peer:4` peer identities; `send`
-  resolves the peer's DID Doc and runs `selectRoutingPath` on it, forward-
-  wrapping through any declared mediators before sending as either
-  JSON or (`--cbor`) CBOR-encoded JWE. `serve` runs the same DIDComm envelope
-  receiver as `listen` behind a minimal web chat UI, with its JSON API
-  routes bearer-token-protected (constant-time check) — identity, keys, and
-  all pack/unpack crypto stay server-side; the browser only ever sees the
-  local DID and the plaintext chat log, never key material.
-
-## Quickstart
+## Install
 
 ```sh
-npm install
-npm run build
-npm run typecheck
-npm test
+npm install didcomm-ts
 ```
 
-See it work end to end in under a minute — two local identities, a real
-authcrypt message over real HTTP:
+Requires Node.js 22.4 or later. ESM only.
+
+## Usage
+
+You supply two resolvers: one that returns DID Documents and one that returns your private keys (JWK). They have the same shape as didcomm-rust's, so existing resolvers port directly.
+
+```ts
+import { packAuthcrypt, unpack, type DIDDoc, type Secret } from 'didcomm-ts';
+
+const docs = new Map<string, DIDDoc>([[alice.id, alice], [bob.id, bob]]);
+const did = { resolve: async (id: string) => docs.get(id) ?? null };
+const secretsFor = (owned: Secret[]) => ({
+  get_secret: async (id: string) => owned.find((s) => s.id === id) ?? null,
+  find_secrets: async (ids: string[]) => ids.filter((id) => owned.some((s) => s.id === id)),
+});
+
+// Alice -> Bob, sender-authenticated (ECDH-1PU+A256KW, A256CBC-HS512).
+const envelope = await packAuthcrypt(
+  {
+    id: crypto.randomUUID(),
+    typ: 'application/didcomm-plain+json',
+    type: 'https://didcomm.org/basicmessage/2.0/message',
+    from: alice.id,
+    to: [bob.id],
+    body: { content: 'hello' },
+  },
+  [bob.id],
+  alice.id,
+  { did, secrets: secretsFor(aliceSecrets) },
+);
+
+const { message, senderKey, recipientKey } = await unpack(envelope, { did, secrets: secretsFor(bobSecrets) });
+```
+
+The same options also cover:
+
+- `packAnoncrypt(message, to, options)`: no sender identity. `anoncryptEnc` selects A256CBC-HS512 (default), A256GCM or XC20P.
+- `signBy: did`: an inner JWS for non-repudiation. `packSigned` / `unpackSigned` handle signed-only messages.
+- `encoding: 'cbor'`: a CBOR-encoded envelope. `unpack` detects JSON or CBOR automatically.
+- `attestation`: the multi-recipient trust gate (see `eatRecipientAttestation` in `didcomm-ts/attestation`).
+
+`unpack` also unwraps anoncrypt around authcrypt (protected sender) and a JWS inside a JWE, and checks that the plaintext `from` / `to` match the keys that actually encrypted and signed it.
+
+### Entry points
+
+Import only what you use. Every entry point is dependency-free and side-effect-free.
+
+| Import | Contents |
+| --- | --- |
+| `didcomm-ts` | Envelope API (`packAuthcrypt`, `packAnoncrypt`, `packSigned`, `unpack`, `unpackSigned`, `anoncryptProvider`, resolver and message types), plus `routing`, `transport`, `attestation` and `provenance` namespaces |
+| `didcomm-ts/core` | Envelope API only |
+| `didcomm-ts/routing` | `routing/2.0/forward` wrapping (`wrapInForward`, `wrapForwardChain`) and `selectRoutingPath` over a DID Doc's `DIDCommMessaging` services |
+| `didcomm-ts/transport` | `listenHttp` / `createHttpHandler` / `sendHttp` (`node:http`) and `listenWebSocket` / `connectWebSocket` (RFC 6455 server, built-in client) |
+| `didcomm-ts/attestation` | EAT tokens (`buildEatToken`, `verifyEatToken`) and `eatRecipientAttestation` for the packing gate |
+| `didcomm-ts/provenance` | A C2PA manifest reference carried in an attachment |
+
+To forward through a mediator, wrap the packed envelope with `wrapForwardChain(envelope, mediators, recipientDid, anoncryptProvider({ did, secrets }))`.
+
+## Interoperability
+
+| Counterparty | Coverage | Result |
+| --- | --- | --- |
+| didcomm-rust (`didcomm` 0.4.1, WASM) | authcrypt, anoncrypt (3 content ciphers), signed, CBOR, multi-recipient; X25519 and P-256; both directions; its published test vectors | 33/33 + 8/8 vectors |
+| didcomm-python 0.3.2 | authcrypt, anoncrypt (3 content ciphers), signed, protected sender; X25519, P-256, P-384, P-521; both directions | 22/22 |
+| mediator.wyvrn.app (live) | Coordinate Mediation, forward, Pickup 3.0, ack | 3/3 recorded runs |
+| aviarytech/didcomm 0.1.35 | anoncrypt X25519 | not interoperable: it predates the final DIDComm v2 JWE format, and didcomm-rust rejects it the same way |
+
+Known-answer tests cover RFC 3394, RFC 7518 App. B.3, draft-irtf-cfrg-xchacha-03, the ECDH-1PU draft's Appendix B and RFC 8949. Details, logs and reproduction commands are in [INTEROP.md](./INTEROP.md).
+
+## Performance
+
+![Throughput chart: didcomm-ts vs didcomm-rust (WASM)](https://raw.githubusercontent.com/writerslogic/didcomm-ts/main/docs/images/benchmark.svg)
+
+Median of 15 interleaved 250 ms windows per operation, 1 KiB message, same keys and DID Docs for both libraries. Across two runs ([run 1](https://github.com/writerslogic/didcomm-ts/blob/main/docs/benchmarks/2026-10-09-apple-m4-run1.json), [run 2](https://github.com/writerslogic/didcomm-ts/blob/main/docs/benchmarks/2026-10-09-apple-m4-run2.json)) absolute numbers drifted with machine load, but didcomm-ts led every case: 1.3–2.8× on X25519, 6.5–10.9× on P-256. Reproduce with `npm run build && npm run bench`.
+
+What this does and doesn't show:
+
+- The comparison is against didcomm-rust's WASM build, which is how JavaScript applications use it. Native Rust was not measured and should be faster.
+- didcomm-ts runs elliptic-curve and AEAD work in OpenSSL through `node:crypto`. It memoizes parsed keys and their native handles per key object, so repeated traffic between the same parties skips re-importing keys.
+- For anoncrypt each library uses its default content cipher: A256CBC-HS512 for didcomm-ts, XC20P for didcomm-rust.
+
+## Chat demo
+
+`src/chat` is a CLI and web chat app built on the library, used for live interop testing. It lives in the repository and is not part of the npm package.
+
+| Alice | Bob |
+| --- | --- |
+| ![Alice's chat view](https://raw.githubusercontent.com/writerslogic/didcomm-ts/main/docs/images/chat-alice.png) | ![Bob's chat view](https://raw.githubusercontent.com/writerslogic/didcomm-ts/main/docs/images/chat-bob.png) |
 
 ```sh
-npm run build
-npm run demo
+npm install && npm run build
+npm run demo                 # two local identities, one authcrypted message over HTTP
+npm start                    # web UI + DIDComm receiver; prints an API token to stderr
+node dist/chat/cli.js mediate did:web:mediator.wyvrn.app
+node dist/chat/cli.js pickup did:web:mediator.wyvrn.app
 ```
 
-Run the chat server locally (serves the web UI and the DIDComm receiver on
-the same port):
+The demo supports `did:key`, `did:web`, `did:peer:2` and long-form `did:peer:4` identities. Keys and all crypto stay server-side; the browser sees only the local DID and the plaintext chat log. The local identity (`.didcomm-ts/identity.json`) is plaintext unless `DIDCOMM_TS_PASSPHRASE` is set before first run. The screenshots come from `node scripts/screenshots.mjs`.
+
+## Development
 
 ```sh
-npm run build
-npm start          # or: node dist/chat/cli.js serve 8080
+npm test                      # unit, vector, interop (didcomm-rust, didcomm-python via uv) and transport tests
+npm run interop:live          # mediate -> send -> pickup -> ack against mediator.wyvrn.app
+npm run interop:aviary        # aviarytech probe
+npm run bench                 # throughput vs didcomm-rust (WASM)
 ```
 
-The process prints a bearer token to stderr on startup; the web UI prompts
-for it once and keeps it in `sessionStorage`.
+didcomm-rust and didcomm-python are development dependencies only: they are the counterparties for the interop tests.
 
-## Known limitations
+## License
 
-- Local identity (`.didcomm-ts/identity.json`) is plaintext by default; set
-  `DIDCOMM_TS_PASSPHRASE` before first run to encrypt it at rest
-  (AES-256-GCM, scrypt-derived key) for anything beyond local testing.
-- The chat log (`.didcomm-ts/messages.json`) is plaintext even when
-  `DIDCOMM_TS_PASSPHRASE` is set — that passphrase covers only
-  `identity.json`.
-- There is still no DID-network-based endpoint discovery: `send`'s
-  `<endpoint-url>` argument is always the literal HTTP destination, with
-  routing deciding only the envelope wrapping, not the transport target.
-- `--cbor` is incompatible with a mediated peer, since forward-wrapping is
-  JSON-only; `listen`/`serve` auto-detect either encoding on receipt.
-- On an ephemeral host with no persistent disk (e.g. a free Render
-  instance), `.didcomm-ts/` resets on every restart/redeploy, including
-  identity — expected for a demo deployment, not a production one.
+Apache-2.0

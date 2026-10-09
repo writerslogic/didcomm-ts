@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { equalBytes } from '@noble/ciphers/utils.js';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -37,11 +37,7 @@ export function u32be(value: number): Uint8Array {
   return out;
 }
 
-/** Constant-time for equal-length inputs; unequal lengths are simply unequal. */
+/** Constant-time for equal-length inputs. */
 export function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-export function sha256(data: Uint8Array): Uint8Array {
-  return new Uint8Array(createHash('sha256').update(data).digest());
+  return equalBytes(a, b);
 }

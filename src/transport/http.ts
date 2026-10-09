@@ -1,5 +1,4 @@
-import express, { type Express, type Request, type Response as ExpressResponse } from "express";
-import type { Server } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 /**
  * Content-types this transport recognizes for a DIDComm envelope body.
@@ -13,6 +12,13 @@ export type OnMessage = (
   contentType: DidCommContentType,
 ) => void | Promise<void>;
 
+export interface HttpHandlerOptions {
+  /** Largest accepted envelope in bytes; larger bodies get 413. Default 10 MiB. */
+  maxBodyBytes?: number;
+}
+
+const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
+
 const SUPPORTED_CONTENT_TYPES: readonly DidCommContentType[] = [
   "application/didcomm-encrypted+json",
   "application/didcomm-encrypted+cbor",
@@ -22,64 +28,96 @@ function isSupportedContentType(value: string): value is DidCommContentType {
   return (SUPPORTED_CONTENT_TYPES as readonly string[]).includes(value);
 }
 
-/**
- * Builds an express app that receives a DIDComm envelope on POST / and
- * invokes `onMessage` with the raw envelope bytes and the content-type
- * that produced them. The content-type on the request determines how the
- * body is parsed: JSON bodies are re-serialized to bytes (so the handler
- * always receives bytes regardless of wire format), CBOR bodies are
- * passed through as the raw bytes received.
- */
-export function createHttpReceiver(onMessage: OnMessage): Express {
-  const app = express();
-
-  app.use(
-    express.raw({
-      type: [...SUPPORTED_CONTENT_TYPES],
-      limit: "10mb",
-    }),
-  );
-
-  app.post("/", (req: Request, res: ExpressResponse) => {
-    const contentType = (req.headers["content-type"] ?? "").split(";")[0].trim();
-
-    if (!isSupportedContentType(contentType)) {
-      res.status(415).json({ error: "unsupported content-type" });
-      return;
-    }
-
-    const body = req.body as Buffer;
-    if (!body || body.length === 0) {
-      res.status(400).json({ error: "empty body" });
-      return;
-    }
-
-    void Promise.resolve(onMessage(new Uint8Array(body), contentType))
-      .then(() => {
-        res.status(202).end();
-      })
-      .catch((err: unknown) => {
-        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-      });
-  });
-
-  return app;
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
 }
 
 /**
- * Starts an HTTP receiver listening on `port` (0 for an ephemeral port).
- * Resolves once the server is listening, with the server and the port
- * actually bound.
+ * A `node:http` request handler that accepts one DIDComm envelope per POST
+ * and invokes `onMessage` with the raw body bytes and its content-type.
+ * Responds 202 on success, 415 for an unsupported content-type, 400 for an
+ * empty body, 413 above `maxBodyBytes`, and 500 if `onMessage` throws.
+ * Usable directly with `http.createServer` or mounted in any framework that
+ * passes through Node's request/response objects with an unread body.
+ */
+export function createHttpHandler(
+  onMessage: OnMessage,
+  options: HttpHandlerOptions = {},
+): (req: IncomingMessage, res: ServerResponse) => void {
+  const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+  return (req, res) => {
+    if (req.method !== "POST") {
+      res.setHeader("allow", "POST");
+      sendJson(res, 405, { error: "method not allowed" });
+      return;
+    }
+    const contentType = (req.headers["content-type"] ?? "").split(";")[0].trim();
+    if (!isSupportedContentType(contentType)) {
+      sendJson(res, 415, { error: "unsupported content-type" });
+      return;
+    }
+    if (Number(req.headers["content-length"] ?? 0) > maxBodyBytes) {
+      sendJson(res, 413, { error: "envelope too large" });
+      req.resume();
+      return;
+    }
+
+    const chunks: Buffer[] = [];
+    let received = 0;
+    let rejected = false;
+    req.on("data", (chunk: Buffer) => {
+      if (rejected) return;
+      received += chunk.length;
+      if (received > maxBodyBytes) {
+        rejected = true;
+        sendJson(res, 413, { error: "envelope too large" });
+        req.resume();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("error", () => {
+      rejected = true;
+      if (!res.headersSent) sendJson(res, 400, { error: "request aborted" });
+    });
+    req.on("end", () => {
+      if (rejected) return;
+      if (received === 0) {
+        sendJson(res, 400, { error: "empty body" });
+        return;
+      }
+      void Promise.resolve()
+        .then(() => onMessage(new Uint8Array(Buffer.concat(chunks)), contentType))
+        .then(() => {
+          res.writeHead(202).end();
+        })
+        .catch((err: unknown) => {
+          sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        });
+    });
+  };
+}
+
+/**
+ * Starts an HTTP receiver on `port` (0 for an ephemeral port) accepting
+ * envelopes on `POST /`. Resolves once the server is listening.
  */
 export function listenHttp(
   port: number,
   onMessage: OnMessage,
+  options: HttpHandlerOptions = {},
 ): Promise<{ server: Server; port: number; close: () => Promise<void> }> {
-  const app = createHttpReceiver(onMessage);
+  const handler = createHttpHandler(onMessage, options);
+  const server = createServer((req, res) => {
+    if ((req.url ?? "/").split("?")[0] !== "/") {
+      sendJson(res, 404, { error: "not found" });
+      return;
+    }
+    handler(req, res);
+  });
   return new Promise((resolve, reject) => {
-    const server = app.listen(port);
     server.once("error", reject);
-    server.once("listening", () => {
+    server.listen(port, () => {
       const address = server.address();
       const boundPort = typeof address === "object" && address !== null ? address.port : port;
       resolve({

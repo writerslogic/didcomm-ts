@@ -69,7 +69,8 @@ import {
   type AnoncryptProvider,
   type EncryptedMessage,
 } from "../routing/index.js";
-import { sendHttp, listenHttp, createHttpReceiver } from "../transport/index.js";
+import { sendHttp, listenHttp } from "../transport/index.js";
+import { createHttpReceiver } from "./httpReceiver.js";
 import { attachProvenance, readProvenance } from "../provenance/index.js";
 
 /** Basic-message protocol URI (generic DIDComm v2, not interop-partner specific). */
