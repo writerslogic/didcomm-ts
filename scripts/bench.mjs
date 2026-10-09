@@ -44,11 +44,17 @@ function party(name, curve) {
   };
 }
 
-function resolvers(docs, secrets) {
+/**
+ * `fresh: true` returns a new copy of every document and secret per lookup,
+ * as a resolver backed by a database or network would, so no implementation
+ * can reuse previously parsed keys. `fresh: false` returns the same objects.
+ */
+function resolvers(docs, secrets, fresh) {
+  const out = (value) => (fresh && value ? structuredClone(value) : value);
   return {
-    did: { resolve: async (did) => docs.find((d) => d.id === did) ?? null },
+    did: { resolve: async (did) => out(docs.find((d) => d.id === did) ?? null) },
     secrets: {
-      get_secret: async (id) => secrets.find((s) => s.id === id) ?? null,
+      get_secret: async (id) => out(secrets.find((s) => s.id === id) ?? null),
       find_secrets: async (ids) => ids.filter((id) => secrets.some((s) => s.id === id)),
     },
   };
@@ -69,8 +75,10 @@ const rust = {
     m.free();
   },
 };
+// Anoncrypt uses XC20P, didcomm-rust's default, so both libraries run the same content cipher.
 const ts = {
-  pack: (msg, to, from, r) => (from ? ours.packAuthcrypt(msg, [to], from, r) : ours.packAnoncrypt(msg, [to], r)),
+  pack: (msg, to, from, r) =>
+    from ? ours.packAuthcrypt(msg, [to], from, r) : ours.packAnoncrypt(msg, [to], { ...r, anoncryptEnc: 'XC20P' }),
   unpack: (envelope, r) => ours.unpack(envelope, r),
 };
 
@@ -106,8 +114,9 @@ for (const curve of ['X25519', 'P-256']) {
   const alice = party('alice', curve);
   const bob = party('bob', curve);
   const docs = [alice.doc, bob.doc];
-  const sender = resolvers(docs, [alice.secret]);
-  const recipient = resolvers(docs, [bob.secret]);
+  for (const keys of ['reused', 'fresh']) {
+  const sender = resolvers(docs, [alice.secret], keys === 'fresh');
+  const recipient = resolvers(docs, [bob.secret], keys === 'fresh');
   for (const mode of ['authcrypt', 'anoncrypt']) {
     const from = mode === 'authcrypt' ? alice.did : null;
     const msg = {
@@ -126,7 +135,8 @@ for (const curve of ['X25519', 'P-256']) {
       tsUnpack: () => ts.unpack(tsEnvelope, recipient),
       rustUnpack: () => rust.unpack(rustEnvelope, recipient),
     });
-    results.push({ curve, mode, opsPerSec: measured });
+    results.push({ curve, mode, keys, opsPerSec: measured });
+  }
   }
 }
 

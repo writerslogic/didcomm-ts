@@ -13,14 +13,14 @@ const report = JSON.parse(readFileSync(reportPath, 'utf8'));
 
 const rows = report.results.flatMap((r) =>
   ['Pack', 'Unpack'].map((op) => ({
-    label: `${r.curve} ${r.mode} · ${op.toLowerCase()}`,
+    label: `${r.curve} ${r.mode} ${op.toLowerCase()} · ${r.keys} keys`,
     ts: r.opsPerSec[`ts${op}`].median,
     rust: r.opsPerSec[`rust${op}`].median,
   })),
 );
 
 const W = 820;
-const LEFT = 210;
+const LEFT = 250;
 const RIGHT = 120;
 const TOP = 96;
 const BAR = 12;
@@ -69,7 +69,7 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" 
 </style>
 <rect class="bg" width="${W}" height="${H}" rx="8"/>
 <text class="primary" x="24" y="34" font-size="16" font-weight="600">Throughput: didcomm-ts vs didcomm-rust (WASM)</text>
-<text class="secondary" x="24" y="54">Median ops/s, higher is better · ${report.messageBytes}-byte message · ${esc(report.cpu)} · Node ${esc(report.node)}</text>
+<text class="secondary" x="24" y="54">Median ops/s, higher is better · ${report.messageBytes}-byte message · anoncrypt XC20P on both · ${esc(report.cpu)} · Node ${esc(report.node)}</text>
 <rect class="ts" x="24" y="68" width="12" height="12" rx="2"/><text class="secondary" x="42" y="78">didcomm-ts</text>
 <rect class="rust" x="130" y="68" width="12" height="12" rx="2"/><text class="secondary" x="148" y="78">didcomm-rust (WASM)</text>
 ${ticks.join('\n')}

@@ -3,7 +3,7 @@ services:
     name: didcomm-ts-listen
     runtime: node
     plan: free
-    buildCommand: npm ci && npm run build
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: node dist/chat/cli.js serve
     envVars:
       - key: NODE_VERSION

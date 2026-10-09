@@ -9,104 +9,216 @@
     {
       "curve": "X25519",
       "mode": "authcrypt",
+      "keys": "reused",
       "opsPerSec": {
         "tsPack": {
-          "median": 2820,
-          "min": 1747,
-          "max": 4191
+          "median": 3254,
+          "min": 2774,
+          "max": 5197
         },
         "rustPack": {
-          "median": 1020,
-          "min": 687,
-          "max": 1331
+          "median": 1299,
+          "min": 947,
+          "max": 1658
         },
         "tsUnpack": {
-          "median": 3368,
-          "min": 1529,
-          "max": 4072
+          "median": 4085,
+          "min": 2941,
+          "max": 5161
         },
         "rustUnpack": {
-          "median": 1375,
-          "min": 723,
-          "max": 1766
+          "median": 1395,
+          "min": 972,
+          "max": 1574
         }
       }
     },
     {
       "curve": "X25519",
       "mode": "anoncrypt",
+      "keys": "reused",
       "opsPerSec": {
         "tsPack": {
-          "median": 3373,
-          "min": 326,
-          "max": 3991
+          "median": 4608,
+          "min": 4306,
+          "max": 5260
         },
         "rustPack": {
-          "median": 2219,
-          "min": 572,
-          "max": 3465
+          "median": 2696,
+          "min": 2208,
+          "max": 3060
         },
         "tsUnpack": {
-          "median": 3954,
-          "min": 380,
-          "max": 4656
+          "median": 5705,
+          "min": 4762,
+          "max": 6493
         },
         "rustUnpack": {
-          "median": 2043,
-          "min": 431,
-          "max": 2271
+          "median": 2754,
+          "min": 2032,
+          "max": 2955
+        }
+      }
+    },
+    {
+      "curve": "X25519",
+      "mode": "authcrypt",
+      "keys": "fresh",
+      "opsPerSec": {
+        "tsPack": {
+          "median": 1684,
+          "min": 998,
+          "max": 2122
+        },
+        "rustPack": {
+          "median": 1069,
+          "min": 884,
+          "max": 1318
+        },
+        "tsUnpack": {
+          "median": 1989,
+          "min": 1575,
+          "max": 2364
+        },
+        "rustUnpack": {
+          "median": 1257,
+          "min": 464,
+          "max": 1570
+        }
+      }
+    },
+    {
+      "curve": "X25519",
+      "mode": "anoncrypt",
+      "keys": "fresh",
+      "opsPerSec": {
+        "tsPack": {
+          "median": 3207,
+          "min": 2310,
+          "max": 3723
+        },
+        "rustPack": {
+          "median": 2295,
+          "min": 2008,
+          "max": 2608
+        },
+        "tsUnpack": {
+          "median": 2813,
+          "min": 2110,
+          "max": 3536
+        },
+        "rustUnpack": {
+          "median": 2276,
+          "min": 2001,
+          "max": 2640
         }
       }
     },
     {
       "curve": "P-256",
       "mode": "authcrypt",
+      "keys": "reused",
       "opsPerSec": {
         "tsPack": {
-          "median": 1402,
-          "min": 618,
-          "max": 2351
+          "median": 2024,
+          "min": 1259,
+          "max": 2367
         },
         "rustPack": {
-          "median": 137,
-          "min": 48,
-          "max": 227
+          "median": 215,
+          "min": 148,
+          "max": 220
         },
         "tsUnpack": {
-          "median": 1419,
-          "min": 322,
-          "max": 2036
+          "median": 1866,
+          "min": 1162,
+          "max": 2160
         },
         "rustUnpack": {
-          "median": 210,
-          "min": 37,
-          "max": 283
+          "median": 262,
+          "min": 214,
+          "max": 319
         }
       }
     },
     {
       "curve": "P-256",
       "mode": "anoncrypt",
+      "keys": "reused",
       "opsPerSec": {
         "tsPack": {
-          "median": 2199,
-          "min": 1110,
-          "max": 3653
+          "median": 3285,
+          "min": 1953,
+          "max": 3962
         },
         "rustPack": {
-          "median": 316,
-          "min": 86,
-          "max": 410
+          "median": 446,
+          "min": 359,
+          "max": 499
         },
         "tsUnpack": {
-          "median": 2058,
-          "min": 733,
-          "max": 2829
+          "median": 3095,
+          "min": 2063,
+          "max": 3451
         },
         "rustUnpack": {
-          "median": 318,
-          "min": 108,
-          "max": 431
+          "median": 407,
+          "min": 369,
+          "max": 437
+        }
+      }
+    },
+    {
+      "curve": "P-256",
+      "mode": "authcrypt",
+      "keys": "fresh",
+      "opsPerSec": {
+        "tsPack": {
+          "median": 1784,
+          "min": 1591,
+          "max": 1906
+        },
+        "rustPack": {
+          "median": 246,
+          "min": 231,
+          "max": 273
+        },
+        "tsUnpack": {
+          "median": 1727,
+          "min": 1558,
+          "max": 1852
+        },
+        "rustUnpack": {
+          "median": 323,
+          "min": 293,
+          "max": 334
+        }
+      }
+    },
+    {
+      "curve": "P-256",
+      "mode": "anoncrypt",
+      "keys": "fresh",
+      "opsPerSec": {
+        "tsPack": {
+          "median": 3169,
+          "min": 2588,
+          "max": 5211
+        },
+        "rustPack": {
+          "median": 510,
+          "min": 365,
+          "max": 660
+        },
+        "tsUnpack": {
+          "median": 2755,
+          "min": 2013,
+          "max": 4437
+        },
+        "rustUnpack": {
+          "median": 474,
+          "min": 356,
+          "max": 767
         }
       }
     }

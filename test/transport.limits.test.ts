@@ -1,4 +1,5 @@
 /** Protocol-level checks for the dependency-free HTTP and WebSocket receivers. */
+import { request } from 'node:http';
 import { connect as netConnect, type Socket } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { listenHttp } from '../src/transport/http.js';
@@ -93,6 +94,23 @@ describe('HTTP receiver', () => {
     expect((await fetch(url, { method: 'POST', headers: ct, body: '' })).status).toBe(400);
     expect((await fetch(url, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: 'x' })).status).toBe(415);
     expect((await fetch(url, { method: 'POST', headers: ct, body: '{}' })).status).toBe(202);
+    await close();
+  });
+
+  test('rejects an oversized chunked upload mid-stream and closes the connection', async () => {
+    let called = false;
+    const { port, close } = await listenHttp(0, () => void (called = true), { maxBodyBytes: 1024 });
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = request({ port, method: 'POST', path: '/', headers: { 'content-type': 'application/didcomm-encrypted+json' } }, (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on('error', reject);
+      for (let i = 0; i < 4; i++) req.write(randomBytes(512));
+      req.end();
+    });
+    expect(status).toBe(413);
+    expect(called).toBe(false);
     await close();
   });
 });

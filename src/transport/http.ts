@@ -32,6 +32,13 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
 }
 
+/** Rejects an oversized upload and drops the connection rather than reading the rest of it. */
+function rejectTooLarge(req: IncomingMessage, res: ServerResponse): void {
+  res.setHeader("connection", "close");
+  res.once("finish", () => req.destroy());
+  sendJson(res, 413, { error: "envelope too large" });
+}
+
 /**
  * A `node:http` request handler that accepts one DIDComm envelope per POST
  * and invokes `onMessage` with the raw body bytes and its content-type.
@@ -57,8 +64,7 @@ export function createHttpHandler(
       return;
     }
     if (Number(req.headers["content-length"] ?? 0) > maxBodyBytes) {
-      sendJson(res, 413, { error: "envelope too large" });
-      req.resume();
+      rejectTooLarge(req, res);
       return;
     }
 
@@ -70,8 +76,7 @@ export function createHttpHandler(
       received += chunk.length;
       if (received > maxBodyBytes) {
         rejected = true;
-        sendJson(res, 413, { error: "envelope too large" });
-        req.resume();
+        rejectTooLarge(req, res);
         return;
       }
       chunks.push(chunk);

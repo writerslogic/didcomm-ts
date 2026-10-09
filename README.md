@@ -7,7 +7,7 @@ An independent DIDComm v2 implementation in TypeScript with zero runtime depende
 - **Independent.** The JOSE layer (ECDH-ES and ECDH-1PU + A256KW, ConcatKDF, A256CBC-HS512 / A256GCM / XC20P, EdDSA / ES256 / ES256K), CBOR codec, DID key handling and HTTP/WebSocket transports are implemented here over `node:crypto`. It does not wrap didcomm-rust.
 - **Zero runtime dependencies.** `npm install didcomm-ts` installs one package. A test fails the build if any published module imports anything but `node:` built-ins.
 - **Interoperable.** Envelopes round-trip in both directions with didcomm-rust and didcomm-python across X25519, P-256, P-384 and P-521, and the library completes mediate → forward → pickup → ack against an independent production mediator. See [INTEROP.md](./INTEROP.md).
-- **Fast.** 1.3–2.8× the throughput of didcomm-rust's WASM build on X25519 and 6.5–10.9× on P-256 (see [Performance](#performance)).
+- **Fast.** Higher throughput than didcomm-rust's WASM build in every measured case: 1.2–2.9× on X25519 and 4.9–10.1× on P-256 (see [Performance](#performance)).
 - **Attestation-gated multi-recipient packing.** Optionally require each recipient key to present an EAT (RFC 9711) device-attestation token bound to that key and a fresh challenge before it joins a shared envelope.
 
 ## Install
@@ -89,13 +89,19 @@ Known-answer tests cover RFC 3394, RFC 7518 App. B.3, draft-irtf-cfrg-xchacha-03
 
 ![Throughput chart: didcomm-ts vs didcomm-rust (WASM)](https://raw.githubusercontent.com/writerslogic/didcomm-ts/main/docs/images/benchmark.svg)
 
-Median of 15 interleaved 250 ms windows per operation, 1 KiB message, same keys and DID Docs for both libraries. Across two runs ([run 1](https://github.com/writerslogic/didcomm-ts/blob/main/docs/benchmarks/2026-10-09-apple-m4-run1.json), [run 2](https://github.com/writerslogic/didcomm-ts/blob/main/docs/benchmarks/2026-10-09-apple-m4-run2.json)) absolute numbers drifted with machine load, but didcomm-ts led every case: 1.3–2.8× on X25519, 6.5–10.9× on P-256. Reproduce with `npm run build && npm run bench`.
+Median of 15 interleaved 250 ms windows per operation, 1 KiB message, same keys, DID Docs and content cipher (XC20P for anoncrypt) for both libraries. "Reused keys" resolvers return the same objects on every call. "Fresh keys" resolvers return new copies of every document and secret per lookup, as a database-backed resolver would, so no parsed key can be reused. Absolute numbers drift with machine load; the ratios held across both runs ([run 1](https://github.com/writerslogic/didcomm-ts/blob/main/docs/benchmarks/2026-10-09-apple-m4-run1.json), [run 2](https://github.com/writerslogic/didcomm-ts/blob/main/docs/benchmarks/2026-10-09-apple-m4-run2.json)):
+
+| | Reused keys | Fresh keys |
+| --- | --- | --- |
+| X25519 | 1.7–2.9× | 1.2–1.6× |
+| P-256 | 6.4–10.1× | 4.9–7.3× |
+
+Reproduce with `npm run build && npm run bench`.
 
 What this does and doesn't show:
 
 - The comparison is against didcomm-rust's WASM build, which is how JavaScript applications use it. Native Rust was not measured and should be faster.
-- didcomm-ts runs elliptic-curve and AEAD work in OpenSSL through `node:crypto`. It memoizes parsed keys and their native handles per key object, so repeated traffic between the same parties skips re-importing keys.
-- For anoncrypt each library uses its default content cipher: A256CBC-HS512 for didcomm-ts, XC20P for didcomm-rust.
+- didcomm-ts runs elliptic-curve and AEAD work in OpenSSL through `node:crypto`. When a resolver hands back the same key objects, it also reuses their parsed form and native handles (held in WeakMaps, so nothing outlives the caller's objects).
 
 ## Chat demo
 

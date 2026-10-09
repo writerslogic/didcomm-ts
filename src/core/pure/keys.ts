@@ -188,14 +188,23 @@ export function publicKeyToJwk(key: PublicKey): Jwk {
   };
 }
 
-function derivePublicKey(curve: Curve, d: Uint8Array): PublicKey {
+/** Derives the public key, returning the native handle built along the way so callers can keep it. */
+function derivePublicKeyWithHandle(
+  curve: Curve,
+  d: Uint8Array,
+): { publicKey: PublicKey; ecdh?: ReturnType<typeof createECDH>; keyObject?: KeyObject } {
   if (isWeierstrass(curve)) {
     const ecdh = createECDH(OPENSSL_CURVE[curve]);
     ecdh.setPrivateKey(Buffer.from(d));
-    return { curve, bytes: new Uint8Array(ecdh.getPublicKey()) };
+    return { publicKey: { curve, bytes: new Uint8Array(ecdh.getPublicKey()) }, ecdh };
   }
-  const spki = createPublicKey(okpPrivateKeyObject(curve, d)).export({ format: 'der', type: 'spki' });
-  return { curve, bytes: new Uint8Array(spki.subarray(OKP_DER[curve].spki.length)) };
+  const keyObject = okpPrivateKeyObject(curve, d);
+  const spki = createPublicKey(keyObject).export({ format: 'der', type: 'spki' });
+  return { publicKey: { curve, bytes: new Uint8Array(spki.subarray(OKP_DER[curve].spki.length)) }, keyObject };
+}
+
+function derivePublicKey(curve: Curve, d: Uint8Array): PublicKey {
+  return derivePublicKeyWithHandle(curve, d).publicKey;
 }
 
 export function privateKeyFromJwk(jwk: Jwk): PrivateKey {
@@ -208,10 +217,15 @@ function parsePrivateJwk(jwk: Jwk & { d: string }): PrivateKey {
   const publicKey = parsePublicJwk(jwk);
   const expectedLength = isWeierstrass(publicKey.curve) ? COORDINATE_LENGTH[publicKey.curve] : 32;
   const d = requireLength(b64urlDecode(jwk.d), expectedLength, `${publicKey.curve} private key`);
-  if (!bytesEqual(derivePublicKey(publicKey.curve, d).bytes, publicKey.bytes)) {
+  const derived = derivePublicKeyWithHandle(publicKey.curve, d);
+  if (!bytesEqual(derived.publicKey.bytes, publicKey.bytes)) {
     throw new Error('Private JWK d does not match its public key');
   }
-  return { curve: publicKey.curve, d, publicKey };
+  const key: PrivateKey = { curve: publicKey.curve, d, publicKey };
+  // The consistency check already imported the key; keep that handle for ECDH and signing.
+  if (derived.ecdh) ecdhHandles.set(key, derived.ecdh);
+  if (derived.keyObject) keyObjects.set(key, derived.keyObject);
+  return key;
 }
 
 export function publicKeyFromVerificationMethod(vm: VerificationMethod): PublicKey {
