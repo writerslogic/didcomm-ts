@@ -48,6 +48,7 @@ describe('WebSocket server', () => {
     socket.write(clientFrame(0x0, Buffer.from('lo')));
     await waitFor(() => messages.length === 1);
     expect(Buffer.from(messages[0]).toString()).toBe('hello');
+    await waitFor(() => received().length >= 3);
     expect(received().subarray(0, 3)).toEqual(Buffer.from([0x8a, 0x01, 0x70]));
     socket.destroy();
     await server.close();
@@ -100,16 +101,19 @@ describe('HTTP receiver', () => {
   test('rejects an oversized chunked upload mid-stream and closes the connection', async () => {
     let called = false;
     const { port, close } = await listenHttp(0, () => void (called = true), { maxBodyBytes: 1024 });
-    const status = await new Promise<number>((resolve, reject) => {
+    // The server answers 413 and drops the connection, so the client may see the reset first.
+    const outcome = await new Promise<string>((resolve, reject) => {
       const req = request({ port, method: 'POST', path: '/', headers: { 'content-type': 'application/didcomm-encrypted+json' } }, (res) => {
         res.resume();
-        resolve(res.statusCode ?? 0);
+        resolve(String(res.statusCode));
       });
-      req.on('error', reject);
+      req.on('error', (err: NodeJS.ErrnoException) =>
+        err.code === 'ECONNRESET' || err.code === 'EPIPE' ? resolve('reset') : reject(err),
+      );
       for (let i = 0; i < 4; i++) req.write(randomBytes(512));
       req.end();
     });
-    expect(status).toBe(413);
+    expect(['413', 'reset']).toContain(outcome);
     expect(called).toBe(false);
     await close();
   });
