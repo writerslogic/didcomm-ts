@@ -5,13 +5,33 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./pure": {
+      "types": "./dist/core/pure/index.d.ts",
+      "import": "./dist/core/pure/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "INTEROP.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc -p .",
     "postbuild": "node -e \"require('fs').cpSync('src/chat/public','dist/chat/public',{recursive:true})\"",
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
     "typecheck": "tsc -p . --noEmit",
     "demo": "node scripts/demo.mjs",
-    "start": "node dist/chat/cli.js serve"
+    "start": "node dist/chat/cli.js serve",
+    "interop:aviary": "npm --prefix test/interop/aviary ci && node test/interop/aviary/probe.mjs",
+    "interop:live": "node scripts/live-interop.mjs",
+    "prepublishOnly": "npm run build"
   },
   "license": "Apache-2.0",
   "repository": {
@@ -33,6 +53,9 @@
     "did-peer"
   ],
   "dependencies": {
+    "@noble/ciphers": "2.4.0",
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
     "cbor-x": "^1.5.9",
     "didcomm": "^0.4.1",
     "express": "^4.21.1",
@@ -47,5 +70,8 @@
     "jest": "^30.5.2",
     "ts-jest": "^29.4.14",
     "typescript": "^5.6.3"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

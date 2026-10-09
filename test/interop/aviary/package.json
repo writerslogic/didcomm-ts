@@ -1,0 +1,10 @@
+{
+  "name": "didcomm-ts-interop-aviary",
+  "private": true,
+  "type": "module",
+  "description": "aviarytech/didcomm counterparty for didcomm-ts interop tests (isolated from the published package)",
+  "dependencies": {
+    "@aviarytech/did-secrets": "0.1.14",
+    "@aviarytech/didcomm-core": "0.1.35"
+  }
+}

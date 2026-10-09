@@ -3,8 +3,9 @@
  * device-attestation evidence carried as an EAT (RFC 9711) token in its CWT/COSE_Sign1
  * form. Integration point: before a primary device trusts a new device's key for
  * multi-recipient authcrypt, it may request an EatToken proving that key is
- * hardware-backed. This module only builds/verifies the token; wiring it into
- * src/core's key-trust flow is future work and is deliberately not done here.
+ * hardware-backed. This module builds/verifies the token; `eatRecipientAttestation`
+ * in ./recipientGate.ts binds it to a recipient key and plugs it into the pack
+ * backends' `attestation` gate.
  */
 
 import { encode, decode } from 'cbor-x';

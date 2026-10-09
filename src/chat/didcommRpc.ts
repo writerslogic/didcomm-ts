@@ -1,12 +1,18 @@
-import {
+import type {
+  DidResolver,
+  PlaintextMessage,
+  SecretsResolver,
   packAuthcrypt,
   unpack,
-  type DidResolver,
-  type PlaintextMessage,
-  type SecretsResolver,
 } from "../core/index.js";
 import { selectRoutingPath, type DIDDoc as RoutingDIDDoc } from "../routing/index.js";
 import { sendHttp } from "../transport/index.js";
+
+/** The pack/unpack pair an exchange uses: the WASM core or `core/pure`. */
+export interface EnvelopeBackend {
+  packAuthcrypt: typeof packAuthcrypt;
+  unpack: typeof unpack;
+}
 
 /** Shared context for a synchronous (`return_route: all`) request/reply exchange with a DIDComm service. */
 export interface RpcContext {
@@ -14,6 +20,8 @@ export interface RpcContext {
   selfDid: string;
   did: DidResolver;
   secrets: SecretsResolver;
+  /** Envelope implementation. Default: the didcomm-rust (WASM) core. */
+  backend?: EnvelopeBackend;
 }
 
 /**
@@ -40,7 +48,9 @@ export async function sendAndAwaitReply(
   endpoint: string,
   ctx: RpcContext,
 ): Promise<PlaintextMessage> {
-  const envelope = await packAuthcrypt(plaintext, [targetDid], ctx.selfDid, {
+  // Loaded on demand so a context using `core/pure` never loads the WASM core.
+  const backend = ctx.backend ?? (await import("../core/index.js"));
+  const envelope = await backend.packAuthcrypt(plaintext, [targetDid], ctx.selfDid, {
     did: ctx.did,
     secrets: ctx.secrets,
   });
@@ -55,6 +65,6 @@ export async function sendAndAwaitReply(
     );
   }
 
-  const { message } = await unpack(replyBytes, { did: ctx.did, secrets: ctx.secrets });
+  const { message } = await backend.unpack(replyBytes, { did: ctx.did, secrets: ctx.secrets });
   return message;
 }

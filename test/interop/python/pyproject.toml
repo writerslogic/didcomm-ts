@@ -1,0 +1,11 @@
+[project]
+name = "didcomm-ts-interop-python"
+version = "0.0.0"
+description = "didcomm-python counterparty for didcomm-ts interop tests"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "didcomm==0.3.2",
+]
+
+[tool.uv]
+package = false

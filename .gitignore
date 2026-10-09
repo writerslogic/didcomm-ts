@@ -2,3 +2,5 @@ node_modules/
 dist/
 *.log
 .didcomm-ts/
+test/interop/*/node_modules/
+test/interop/*/.venv/
